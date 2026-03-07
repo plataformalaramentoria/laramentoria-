@@ -91,3 +91,23 @@ export interface AgendaEvent {
   created_at: string;
 }
 
+export interface ProgressStage {
+  id: string;
+  student_id: string;
+  title: string;
+  description: string | null;
+  order: number;
+  created_at: string;
+  // Included via joins:
+  items?: ProgressItem[];
+}
+
+export interface ProgressItem {
+  id: string;
+  stage_id: string;
+  student_id: string;
+  title: string;
+  completed: boolean;
+  order: number;
+  created_at: string;
+}

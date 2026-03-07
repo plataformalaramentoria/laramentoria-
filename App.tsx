@@ -20,7 +20,13 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 const AppContent: React.FC = () => {
   const { session, role, loading, signOut } = useAuth();
-  const [currentView, setCurrentView] = useState<ViewState>('DASHBOARD');
+  
+  // Restore currentView from localStorage, fallback to DASHBOARD
+  const [currentView, setCurrentView] = useState<ViewState>(() => {
+    const saved = localStorage.getItem('lara_current_view');
+    return (saved as ViewState) || 'DASHBOARD';
+  });
+  
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
 
@@ -39,8 +45,18 @@ const AppContent: React.FC = () => {
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
 
+  // Sync currentView changes to localStorage
+  useEffect(() => {
+    localStorage.setItem('lara_current_view', currentView);
+  }, [currentView]);
+
   if (loading) {
-    return <div className="h-screen flex items-center justify-center">Carregando...</div>;
+    return (
+      <div className="h-screen bg-[#FDFBF7] dark:bg-[#0c0a09] flex flex-col items-center justify-center">
+        <div className="w-12 h-12 border-4 border-secondary/20 dark:border-primary/20 border-t-secondary dark:border-t-primary rounded-full animate-spin mb-4"></div>
+        <p className="font-serif text-secondary dark:text-primary font-medium opacity-80 animate-pulse">Autenticando...</p>
+      </div>
+    );
   }
 
   if (!session) {

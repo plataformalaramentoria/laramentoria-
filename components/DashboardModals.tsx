@@ -31,25 +31,37 @@ const BaseModal: React.FC<BaseModalProps> = ({ isOpen, title, onClose, children 
 export const TaskModal = ({ isOpen, onClose, onSave, initialData }: { 
     isOpen: boolean, 
     onClose: () => void, 
-    onSave: (data: { text: string, due_label: string, is_urgent: boolean }) => void, 
+    onSave: (data: { text: string, due_label: string, is_urgent: boolean }) => Promise<void> | void, 
     initialData?: DashboardTask | null 
 }) => {
     const [text, setText] = useState('');
     const [dueLabel, setDueLabel] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
 
     useEffect(() => {
         if (isOpen) {
             setText(initialData?.text || '');
             setDueLabel(initialData?.due_label || 'HOJE');
+            setIsLoading(false);
+            setErrorMsg('');
         }
     }, [isOpen, initialData]);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!text.trim()) return;
-        const isListHover = dueLabel.toUpperCase() === 'HOJE';
-        onSave({ text, due_label: dueLabel.toUpperCase() || 'HOJE', is_urgent: isListHover });
-        onClose();
+        setIsLoading(true);
+        setErrorMsg('');
+        try {
+            const isListHover = dueLabel.toUpperCase() === 'HOJE';
+            await onSave({ text, due_label: dueLabel.toUpperCase() || 'HOJE', is_urgent: isListHover });
+            onClose();
+        } catch (error: any) {
+            setErrorMsg(error.message || 'Erro ao salvar. Verifique sua conexão e permissões.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
@@ -71,10 +83,17 @@ export const TaskModal = ({ isOpen, onClose, onSave, initialData }: {
                     <input type="text" value={dueLabel} onChange={(e) => setDueLabel(e.target.value)} placeholder="Ou digite uma data (ex: 15/10)" className="w-full mt-3 p-3 rounded-lg bg-surface dark:bg-dark-surface border border-transparent focus:border-secondary dark:focus:border-primary outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400 transition-all font-medium text-sm" />
                 </div>
                 <div className="flex justify-end pt-2">
-                     <button type="submit" disabled={!text.trim()} className="px-6 py-3 rounded-xl font-bold bg-secondary dark:bg-primary text-white dark:text-stone-900 shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full">
-                        {initialData ? "Salvar Alterações" : "Adicionar Tarefa"}
+                     <button type="submit" disabled={!text.trim() || isLoading} className="flex justify-center items-center px-6 py-3 rounded-xl font-bold bg-secondary dark:bg-primary text-white dark:text-stone-900 shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full">
+                        {isLoading ? (
+                            <div className="w-5 h-5 border-2 border-white/30 dark:border-stone-900/30 border-t-white dark:border-t-stone-900 rounded-full animate-spin"></div>
+                        ) : (initialData ? "Salvar Alterações" : "Adicionar Tarefa")}
                     </button>
                 </div>
+                {errorMsg && (
+                    <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg text-center animate-fade-in border border-red-100 dark:border-red-900/30">
+                        {errorMsg}
+                    </div>
+                )}
             </form>
         </BaseModal>
     );
@@ -83,24 +102,36 @@ export const TaskModal = ({ isOpen, onClose, onSave, initialData }: {
 export const GoalModal = ({ isOpen, onClose, onSave, initialData }: { 
     isOpen: boolean, 
     onClose: () => void, 
-    onSave: (data: { title: string, percent: number }) => void, 
+    onSave: (data: { title: string, percent: number }) => Promise<void> | void, 
     initialData?: DashboardGoal | null 
 }) => {
     const [title, setTitle] = useState('');
     const [percent, setPercent] = useState(0);
+    const [isLoading, setIsLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
 
     useEffect(() => {
         if (isOpen) {
             setTitle(initialData?.title || '');
             setPercent(initialData?.percent || 0);
+            setIsLoading(false);
+            setErrorMsg('');
         }
     }, [isOpen, initialData]);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!title.trim()) return;
-        onSave({ title, percent });
-        onClose();
+        setIsLoading(true);
+        setErrorMsg('');
+        try {
+            await onSave({ title, percent });
+            onClose();
+        } catch (error: any) {
+            setErrorMsg(error.message || 'Erro ao salvar a meta.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
@@ -118,10 +149,17 @@ export const GoalModal = ({ isOpen, onClose, onSave, initialData }: {
                     <input type="range" min="0" max="100" value={percent} onChange={(e) => setPercent(parseInt(e.target.value))} className="w-full h-2 bg-gray-200 dark:bg-stone-700 rounded-lg appearance-none cursor-pointer accent-secondary dark:accent-primary" />
                 </div>
                 <div className="flex justify-end pt-2">
-                     <button type="submit" disabled={!title.trim()} className="px-6 py-3 rounded-xl font-bold bg-secondary dark:bg-primary text-white dark:text-stone-900 shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full">
-                        {initialData ? "Salvar Progresso" : "Criar Meta"}
+                     <button type="submit" disabled={!title.trim() || isLoading} className="flex justify-center items-center px-6 py-3 rounded-xl font-bold bg-secondary dark:bg-primary text-white dark:text-stone-900 shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full">
+                        {isLoading ? (
+                            <div className="w-5 h-5 border-2 border-white/30 dark:border-stone-900/30 border-t-white dark:border-t-stone-900 rounded-full animate-spin"></div>
+                        ) : (initialData ? "Salvar Progresso" : "Criar Meta")}
                     </button>
                 </div>
+                {errorMsg && (
+                    <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg text-center animate-fade-in border border-red-100 dark:border-red-900/30">
+                        {errorMsg}
+                    </div>
+                )}
             </form>
         </BaseModal>
     );
@@ -130,12 +168,14 @@ export const GoalModal = ({ isOpen, onClose, onSave, initialData }: {
 export const EventModal = ({ isOpen, onClose, onSave, initialData }: { 
     isOpen: boolean, 
     onClose: () => void, 
-    onSave: (data: { text: string, date_day: string, date_month: string }) => void, 
+    onSave: (data: { text: string, date_day: string, date_month: string }) => Promise<void> | void, 
     initialData?: AgendaEvent | null 
 }) => {
     const [text, setText] = useState('');
     const [dateDay, setDateDay] = useState('');
     const [dateMonth, setDateMonth] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [errorMsg, setErrorMsg] = useState('');
 
     useEffect(() => {
         if (isOpen) {
@@ -143,14 +183,24 @@ export const EventModal = ({ isOpen, onClose, onSave, initialData }: {
             setDateDay(initialData?.date_day || new Date().getDate().toString());
             const months = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
             setDateMonth(initialData?.date_month || months[new Date().getMonth()]);
+            setIsLoading(false);
+            setErrorMsg('');
         }
     }, [isOpen, initialData]);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!text.trim() || !dateDay.trim() || !dateMonth.trim()) return;
-        onSave({ text, date_day: dateDay, date_month: dateMonth.toUpperCase().substring(0, 3) });
-        onClose();
+        setIsLoading(true);
+        setErrorMsg('');
+        try {
+            await onSave({ text, date_day: dateDay, date_month: dateMonth.toUpperCase().substring(0, 3) });
+            onClose();
+        } catch (error: any) {
+             setErrorMsg(error.message || 'Erro ao salvar o evento.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
@@ -171,10 +221,17 @@ export const EventModal = ({ isOpen, onClose, onSave, initialData }: {
                     </div>
                 </div>
                 <div className="flex justify-end pt-2">
-                     <button type="submit" disabled={!text.trim() || !dateDay.trim() || !dateMonth.trim()} className="px-6 py-3 rounded-xl font-bold bg-secondary dark:bg-primary text-white dark:text-stone-900 shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full">
-                        {initialData ? "Salvar Evento" : "Adicionar à Agenda"}
+                     <button type="submit" disabled={!text.trim() || !dateDay.trim() || !dateMonth.trim() || isLoading} className="flex justify-center items-center px-6 py-3 rounded-xl font-bold bg-secondary dark:bg-primary text-white dark:text-stone-900 shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all disabled:opacity-50 disabled:cursor-not-allowed w-full">
+                        {isLoading ? (
+                            <div className="w-5 h-5 border-2 border-white/30 dark:border-stone-900/30 border-t-white dark:border-t-stone-900 rounded-full animate-spin"></div>
+                        ) : (initialData ? "Salvar Evento" : "Adicionar à Agenda")}
                     </button>
                 </div>
+                {errorMsg && (
+                    <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm font-medium rounded-lg text-center animate-fade-in border border-red-100 dark:border-red-900/30">
+                        {errorMsg}
+                    </div>
+                )}
             </form>
         </BaseModal>
     );

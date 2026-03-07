@@ -22,31 +22,74 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Get initial session
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            setUser(session?.user ?? null);
-            if (session?.user) {
-                fetchUserProfile(session.user.id);
-            } else {
-                setLoading(false);
+        let mounted = true;
+
+        const initAuth = async () => {
+            try {
+                // 1. Check for mock session first so it survives F5
+                const storedMockStr = localStorage.getItem('lara_mock_session');
+                if (storedMockStr) {
+                    try {
+                        const storedMock = JSON.parse(storedMockStr);
+                        if (mounted) {
+                            setSession(storedMock);
+                            setUser(storedMock.user);
+                            setRole(storedMock.role);
+                            setLoading(false);
+                        }
+                        return;
+                    } catch (e) {
+                        localStorage.removeItem('lara_mock_session');
+                    }
+                }
+
+                // 2. Not a mock, retrieve Supabase real session
+                const { data: { session }, error } = await supabase.auth.getSession();
+                if (error) throw error;
+
+                if (mounted) {
+                    if (session?.user) {
+                        setSession(session);
+                        setUser(session.user);
+                        await fetchUserProfile(session.user.id);
+                    } else {
+                        setSession(null);
+                        setUser(null);
+                        setRole(null);
+                        setLoading(false);
+                    }
+                }
+            } catch (err) {
+                console.error("Error restoring session:", err);
+                if (mounted) setLoading(false);
             }
-        });
+        };
 
-        // Listen for changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            setUser(session?.user ?? null);
+        // Fire initialization sequence
+        initAuth();
 
-            if (session?.user) {
-                fetchUserProfile(session.user.id);
+        // 3. Listen for future auth changes gracefully
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
+            if (!mounted) return;
+            // Never overwrite state if we are purposely mimicking another user locally
+            if (localStorage.getItem('lara_mock_session')) return;
+
+            if (currentSession?.user) {
+                setSession(currentSession);
+                setUser(currentSession.user);
+                await fetchUserProfile(currentSession.user.id);
             } else {
+                setSession(null);
+                setUser(null);
                 setRole(null);
                 setLoading(false);
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            mounted = false;
+            subscription.unsubscribe();
+        };
     }, []);
 
     const fetchUserProfile = async (userId: string) => {
@@ -66,6 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         } catch (err) {
             console.error('Unexpected error fetching profile', err);
+            setRole('STUDENT'); // Fallback if network fails but session exists
         } finally {
             setLoading(false);
         }
@@ -90,10 +134,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     created_at: new Date().toISOString(),
                 }
             };
+            const roleStr: Role = 'PROFESSOR';
+            localStorage.setItem('lara_mock_session', JSON.stringify({ ...mockSession, role: roleStr }));
 
             setSession(mockSession);
             setUser(mockSession.user);
-            setRole('PROFESSOR'); // or STUDENT based on need, User asked for specific access
+            setRole(roleStr); // or STUDENT based on need, User asked for specific access
             setLoading(false);
             return { error: null };
         } else if (email === 'joaovilelaestudos@gmail.com' && password === 'gg8754070302') {
@@ -113,10 +159,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     created_at: new Date().toISOString(),
                 }
             };
+            const roleStr: Role = 'STUDENT';
+            localStorage.setItem('lara_mock_session', JSON.stringify({ ...mockSession, role: roleStr }));
 
             setSession(mockSession);
             setUser(mockSession.user);
-            setRole('STUDENT');
+            setRole(roleStr);
             setLoading(false);
             return { error: null };
         }
@@ -129,10 +177,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const signOut = async () => {
-        await supabase.auth.signOut();
-        setSession(null);
-        setUser(null);
-        setRole(null);
+        try {
+            if (!localStorage.getItem('lara_mock_session')) {
+                await supabase.auth.signOut();
+            }
+        } catch (error) {
+            console.error("Error signing out:", error);
+        } finally {
+            localStorage.removeItem('lara_mock_session'); // Clear mock session
+            localStorage.removeItem('lara_current_view'); // Clear saved view context
+            setSession(null);
+            setUser(null);
+            setRole(null);
+        }
     };
 
     return (
