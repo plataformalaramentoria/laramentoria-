@@ -111,3 +111,24 @@ export interface ProgressItem {
   order: number;
   created_at: string;
 }
+
+export interface NoticeFolder {
+  id: string;
+  name: string;
+  created_at: string;
+  // Included via joins:
+  notices?: Notice[];
+}
+
+export interface Notice {
+  id: string;
+  folder_id: string;
+  title: string;
+  description: string | null;
+  file_url: string;
+  file_path: string;
+  file_size: string | null;
+  visibility_type: 'ALL' | 'SPECIFIC';
+  visible_students: string[]; // UUIDs
+  created_at: string;
+}
