@@ -1,118 +1,181 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     ChevronDown,
-    ChevronRight,
     CheckCircle,
     Circle,
     Edit2,
     Trash2,
     Plus,
     Save,
-    X,
-    MoreVertical
+    User
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { supabase } from '../services/supabaseClient';
+import { CurriculumSection, CurriculumItem } from '../types';
 
-// --- Types ---
-interface CurriculumItem {
-    id: string;
-    text: string;
-    completed: boolean;
+interface CurriculumScreenProps {
+    studentId?: string;
 }
 
-interface CurriculumSection {
-    id: string;
-    title: string;
-    expanded: boolean;
-    items: CurriculumItem[];
-}
-
-// --- Mock Data ---
-const INITIAL_SECTIONS: CurriculumSection[] = [
-    {
-        id: '1',
-        title: 'Dados Pessoais Atualizados',
-        expanded: true,
-        items: [
-            { id: '1-1', text: 'Atualizar endereço no Lattes', completed: true },
-            { id: '1-2', text: 'Inserir nome em citações bibliográficas', completed: true },
-            { id: '1-3', text: 'Vincular ORCID', completed: false }
-        ]
-    },
-    {
-        id: '2',
-        title: 'Formação Acadêmica',
-        expanded: false,
-        items: [
-            { id: '2-1', text: 'Inserir Graduação', completed: true },
-            { id: '2-2', text: 'Inserir Especialização (se houver)', completed: false }
-        ]
-    },
-    {
-        id: '3',
-        title: 'Atuação Profissional',
-        expanded: false,
-        items: [
-            { id: '3-1', text: 'Cadastrar vínculo atual', completed: false },
-            { id: '3-2', text: 'Descrever atividades realizadas', completed: false }
-        ]
-    },
-    {
-        id: '4',
-        title: 'Produção Bibliográfica',
-        expanded: false,
-        items: [
-            { id: '4-1', text: 'Cadastrar artigos publicados', completed: false },
-            { id: '4-2', text: 'Inserir trabalhos em anais de eventos', completed: false }
-        ]
-    }
-];
-
-export const CurriculumScreen: React.FC = () => {
+export const CurriculumScreen: React.FC<CurriculumScreenProps> = ({ studentId }) => {
+    const { session, role, user } = useAuth();
+    
     // --- State ---
-    const [sections, setSections] = useState<CurriculumSection[]>(INITIAL_SECTIONS);
+    const [sections, setSections] = useState<CurriculumSection[]>([]);
     const [isEditMode, setIsEditMode] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
 
     // --- Modal State ---
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [sectionToDelete, setSectionToDelete] = useState<string | null>(null);
 
-    // --- Actions ---
+    // Determine the target student ID
+    // If student, they only edit themselves. If Professor, they edit the studentId passed via props.
+    const targetStudentId = studentId || user?.id; 
 
-    // Expand/Collapse Section
+    // --- Fetch Logic ---
+    const fetchCurriculum = async () => {
+        if (!targetStudentId) return;
+        setIsLoading(true);
+
+        try {
+            // SUPABASE REAL
+            const { data: sectionsData, error: sectionsError } = await supabase
+                .from('curriculum_sections')
+                .select('*')
+                .eq('student_id', targetStudentId)
+                .order('order', { ascending: true });
+
+            if (sectionsError) throw sectionsError;
+
+            if (!sectionsData || sectionsData.length === 0) {
+                setSections([]);
+                return;
+            }
+
+            const sectionIds = sectionsData.map(s => s.id);
+
+            const { data: itemsData, error: itemsError } = await supabase
+                .from('curriculum_items')
+                .select('*')
+                .in('section_id', sectionIds)
+                .order('order', { ascending: true });
+
+            if (itemsError) throw itemsError;
+
+            // Mount the tree
+            const mountedSections: CurriculumSection[] = sectionsData.map(s => ({
+                ...s,
+                expanded: false, // Default UI state closed unless empty
+                items: itemsData.filter(i => i.section_id === s.id)
+            }));
+
+            // Auto-expand the first one if it exists
+            if (mountedSections.length > 0) {
+                 mountedSections[0].expanded = true;
+            }
+
+            setSections(mountedSections);
+
+        } catch (error) {
+            console.error("Error fetching curriculum:", error);
+            // Non-intrusive fallback 
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (targetStudentId) {
+            fetchCurriculum();
+        }
+    }, [targetStudentId, session]);
+
+    // --- Save Logic (Optimistic UI Approach) ---
+    // Instead of hitting the DB on every character typed, we hit it on "Save" or "Checkbox Toggle"
+    const saveToBackend = async (currentSections: CurriculumSection[]) => {
+        if (!targetStudentId) return;
+        setIsSaving(true);
+        try {
+            // SUPABASE REAL 
+            // 1. Delete all existing items and sections for this student to re-insert cleanly and avoid complex diffing
+            // In a larger app with huge grids this is bad practice, but for a 20-item checklist it's bulletproof.
+            // Actually, because of RLS, we only delete rows owned by this student.
+            await supabase.from('curriculum_sections').delete().eq('student_id', targetStudentId);
+
+            for (let i = 0; i < currentSections.length; i++) {
+                const sec = currentSections[i];
+                // Insert Section
+                const newSectionId = crypto.randomUUID(); // generate UUID front-end to keep linkage
+                const { error: secErr } = await supabase.from('curriculum_sections').insert({
+                    id: newSectionId,
+                    student_id: targetStudentId,
+                    title: sec.title,
+                    order: i
+                });
+                if (secErr) throw secErr;
+
+                // Insert Items for this section
+                if (sec.items && sec.items.length > 0) {
+                    const mappedItems = sec.items.map((item, index) => ({
+                         id: crypto.randomUUID(),
+                         section_id: newSectionId,
+                         text: item.text,
+                         completed: item.completed,
+                         order: index
+                    }));
+                    const { error: itemsErr } = await supabase.from('curriculum_items').insert(mappedItems);
+                    if (itemsErr) throw itemsErr;
+                }
+            }
+             
+            // Re-fetch to ensure IDs are synced perfectly (optional, but safer)
+            await fetchCurriculum();
+
+        } catch (error: any) {
+            console.error("Failed to save curriculum:", error);
+            alert(`Erro ao salvar o currículo: ${error.message}`);
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    // --- UI Actions ---
+
     const toggleSection = (id: string) => {
         setSections(sections.map(s => s.id === id ? { ...s, expanded: !s.expanded } : s));
     };
 
-    // Toggle Item Completion
-    const toggleItemCompletion = (sectionId: string, itemId: string) => {
-        if (isEditMode) return; // Prevent toggling while editing
-        setSections(sections.map(s => {
+    const toggleItemCompletion = async (sectionId: string, itemId: string) => {
+        if (isEditMode) return; 
+        const updated = sections.map(s => {
             if (s.id === sectionId) {
                 return {
                     ...s,
-                    items: s.items.map(item => item.id === itemId ? { ...item, completed: !item.completed } : item)
+                    items: (s.items || []).map(item => item.id === itemId ? { ...item, completed: !item.completed } : item)
                 };
             }
             return s;
-        }));
+        });
+        setSections(updated);
+        // Persist immediately on checkbox toggle
+        await saveToBackend(updated);
     };
-
-    // --- CRUD Actions (Edit Mode) ---
 
     // Edit Section Title
     const updateSectionTitle = (id: string, newTitle: string) => {
         setSections(sections.map(s => s.id === id ? { ...s, title: newTitle } : s));
     };
 
-    // Request Delete Section
+    // Request Delete
     const requestDeleteSection = (id: string) => {
         setSectionToDelete(id);
         setDeleteModalOpen(true);
     };
 
-    // Confirm Delete Section
+    // Confirm Delete
     const confirmDeleteSection = () => {
         if (sectionToDelete) {
             setSections(sections.filter(s => s.id !== sectionToDelete));
@@ -123,9 +186,13 @@ export const CurriculumScreen: React.FC = () => {
 
     // Add New Section
     const addSection = () => {
+        if (!targetStudentId) return;
         const newSection: CurriculumSection = {
             id: Date.now().toString(),
+            student_id: targetStudentId,
             title: 'Nova Seção Curricular',
+            order: sections.length,
+            created_at: new Date().toISOString(),
             expanded: true,
             items: []
         };
@@ -138,7 +205,7 @@ export const CurriculumScreen: React.FC = () => {
             if (s.id === sectionId) {
                 return {
                     ...s,
-                    items: s.items.map(item => item.id === itemId ? { ...item, text: newText } : item)
+                    items: (s.items || []).map(item => item.id === itemId ? { ...item, text: newText } : item)
                 };
             }
             return s;
@@ -151,7 +218,7 @@ export const CurriculumScreen: React.FC = () => {
             if (s.id === sectionId) {
                 return {
                     ...s,
-                    items: s.items.filter(item => item.id !== itemId)
+                    items: (s.items || []).filter(item => item.id !== itemId)
                 };
             }
             return s;
@@ -164,30 +231,58 @@ export const CurriculumScreen: React.FC = () => {
             if (s.id === sectionId) {
                 return {
                     ...s,
-                    expanded: true, // Ensure expanded to see new item
-                    items: [...s.items, { id: Date.now().toString(), text: 'Novo Item', completed: false }]
+                    expanded: true,
+                    items: [...(s.items || []), { 
+                        id: Date.now().toString(), 
+                        section_id: sectionId,
+                        text: 'Novo Item', 
+                        completed: false,
+                        order: (s.items || []).length,
+                        created_at: new Date().toISOString()
+                    }]
                 };
             }
             return s;
         }));
     };
 
+    const handleToggleEditMode = async () => {
+        if (isEditMode) {
+            // Exiting edit mode -> trigger SAVE
+            await saveToBackend(sections);
+        }
+        setIsEditMode(!isEditMode);
+    };
+
+    if (isLoading) {
+        return (
+            <div className="flex justify-center items-center h-64">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-secondary"></div>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-8 animate-fade-in pb-12">
             <header className="flex justify-between items-center border-b border-premium-border dark:border-stone-700 pb-4">
                 <div>
-                    <h1 className="text-3xl font-serif text-secondary dark:text-primary font-medium">Construção Curricular</h1>
-                    <p className="text-gray-500 dark:text-gray-400 mt-1">Checklist estruturado para o Currículo Lattes.</p>
+                    <h1 className="text-3xl font-serif text-secondary dark:text-primary font-medium">Meu Currículo</h1>
+                    <p className="text-gray-500 dark:text-gray-400 mt-1">
+                        Mapeamento estruturado do Currículo Lattes.
+                    </p>
                 </div>
+                
                 <button
-                    onClick={() => setIsEditMode(!isEditMode)}
-                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all shadow-sm ${isEditMode
+                    onClick={handleToggleEditMode}
+                    disabled={isSaving}
+                    className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold transition-all shadow-sm disabled:opacity-50 ${isEditMode
                         ? 'bg-secondary text-white hover:bg-[#6b5d52]'
                         : 'bg-white dark:bg-dark-card text-secondary dark:text-primary border border-premium-border dark:border-stone-700 hover:bg-[#faf9f8] dark:hover:bg-stone-800'
                         }`}
                 >
-                    {isEditMode ? (
+                    {isSaving ? (
+                        <><div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" /> Salvando...</>
+                    ) : isEditMode ? (
                         <><Save size={18} /> Salvar Estrutura</>
                     ) : (
                         <><Edit2 size={18} /> Editar Currículo</>
@@ -195,11 +290,30 @@ export const CurriculumScreen: React.FC = () => {
                 </button>
             </header>
 
+            {/* EMPTY STATE - Virgin for new accounts */}
+            {!isLoading && sections.length === 0 && !isEditMode && (
+                <div className="flex flex-col items-center justify-center p-12 bg-white dark:bg-dark-card border border-premium-border dark:border-stone-700 rounded-2xl text-center shadow-sm">
+                    <div className="w-16 h-16 bg-surface dark:bg-stone-800 rounded-full flex items-center justify-center mb-4 text-secondary dark:text-primary">
+                        <User size={32} />
+                    </div>
+                    <h3 className="text-xl font-serif font-bold text-gray-800 dark:text-gray-200 mb-2">Currículo não mapeado</h3>
+                    <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-6">
+                        O seu mapeamento de currículo ainda não foi iniciado. {role === 'PROFESSOR' ? 'Inicie a modelagem do currículo deste aluno.' : 'Clique em Editar Currículo para criar as seções e tarefas.'}
+                    </p>
+                    <button
+                        onClick={() => setIsEditMode(true)}
+                        className="flex items-center gap-2 px-6 py-3 bg-secondary text-white rounded-xl font-bold hover:bg-[#6b5d52] transition-colors"
+                    >
+                        <Edit2 size={18} />
+                        Iniciar Mapeamento 
+                    </button>
+                </div>
+            )}
+
             <div className="space-y-6">
                 {sections.map(section => {
-                    // Logic for section completeness visual
-                    const completedCount = section.items.filter(i => i.completed).length;
-                    const totalCount = section.items.length;
+                    const completedCount = (section.items || []).filter(i => i.completed).length;
+                    const totalCount = (section.items || []).length;
                     const isAllDone = totalCount > 0 && completedCount === totalCount;
 
                     return (
@@ -208,15 +322,13 @@ export const CurriculumScreen: React.FC = () => {
                             className={`group bg-white dark:bg-dark-card rounded-2xl border transition-all duration-300 overflow-hidden 
                             ${section.expanded ? 'shadow-level-2 border-premium-border dark:border-stone-600' : 'shadow-level-1 border-transparent hover:border-premium-border/50'}`}
                         >
-                            {/* Section Header */}
                             <div
                                 onClick={() => !isEditMode && toggleSection(section.id)}
                                 className={`flex items-center p-6 cursor-pointer bg-gradient-to-r from-transparent via-transparent to-transparent hover:to-[#f9f7f5] dark:hover:to-stone-800/30 transition-all active:scale-[0.99]`}
                             >
-                                {/* Icon / Drag Handle */}
                                 <div className="mr-4 text-secondary dark:text-primary/70">
                                     {isEditMode ? (
-                                        <button onClick={() => updateSectionTitle(section.id, 'Nova Seção')} className="cursor-move"><MoreVerticalDots size={20} /></button>
+                                        <div className="cursor-move"><MoreVerticalDots size={20} /></div>
                                     ) : (
                                         <div className={`p-2 rounded-lg transition-colors ${isAllDone ? 'bg-green-100 text-green-600 dark:bg-green-900/20 dark:text-green-400' : 'bg-surface dark:bg-dark-surface'}`}>
                                             {isAllDone ? <CheckCircle size={20} /> : <Circle size={20} />}
@@ -224,7 +336,6 @@ export const CurriculumScreen: React.FC = () => {
                                     )}
                                 </div>
 
-                                {/* Title Area */}
                                 <div className="flex-1">
                                     {isEditMode ? (
                                         <input
@@ -245,7 +356,6 @@ export const CurriculumScreen: React.FC = () => {
                                     )}
                                 </div>
 
-                                {/* Actions / Expand Icon */}
                                 <div className="flex items-center gap-3 ml-4">
                                     {isEditMode && (
                                         <button
@@ -264,14 +374,12 @@ export const CurriculumScreen: React.FC = () => {
                                 </div>
                             </div>
 
-                            {/* Section Items (Accordion Content) */}
                             <div
-                                className={`transition-all duration-500 ease-in-out overflow-hidden ${section.expanded ? 'max-h-[1000px] opacity-100' : 'max-h-0 opacity-0'}`}
+                                className={`transition-all duration-500 ease-in-out overflow-hidden ${section.expanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'}`}
                             >
                                 <div className="p-6 pt-0 space-y-2">
-                                    {/* Inner line connector visual */}
                                     <div className="ml-8 pl-8 border-l-2 border-dashed border-gray-100 dark:border-stone-700 space-y-3">
-                                        {section.items.map(item => (
+                                        {(section.items || []).map(item => (
                                             <div
                                                 key={item.id}
                                                 className={`flex items-center p-3 rounded-xl transition-all group/item
@@ -334,7 +442,6 @@ export const CurriculumScreen: React.FC = () => {
                 )}
             </div>
 
-            {/* Custom Delete Confirmation Modal */}
             <ConfirmModal
                 isOpen={deleteModalOpen}
                 title="Tem certeza que deseja excluir esta seção inteira?"

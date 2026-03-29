@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Calendar, CheckCircle, Bell, ArrowRight, MoreHorizontal, PanelLeft, PanelLeftOpen, Trash2, Plus, Edit2, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabaseClient';
+import { supabaseAdmin } from '../services/supabaseAdminClient';
 import { AdvisorMessage, DashboardTask, DashboardGoal, AgendaEvent } from '../types';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { TaskModal, GoalModal, EventModal } from '../components/DashboardModals';
@@ -12,13 +13,22 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = true }) => {
-  const { user } = useAuth();
+  const { user, fullName } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   
   const [message, setMessage] = useState<AdvisorMessage | null>(null);
   const [tasks, setTasks] = useState<DashboardTask[]>([]);
   const [goals, setGoals] = useState<DashboardGoal[]>([]);
   const [events, setEvents] = useState<AgendaEvent[]>([]);
+
+  // Current Date in Brasília
+  const currentDateLabel = useMemo(() => {
+    return new Intl.DateTimeFormat('pt-BR', { 
+      month: 'long', 
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo' 
+    }).format(new Date());
+  }, []);
 
   // Modal States
   const [taskModalState, setTaskModalState] = useState<{ isOpen: boolean, data?: DashboardTask | null }>({ isOpen: false });
@@ -31,99 +41,61 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
   const [messageError, setMessageError] = useState('');
 
   useEffect(() => {
+    let mounted = true;
     if (!user) return;
 
     const fetchDashboardData = async () => {
+      console.log("[Dashboard] Starting parallel fetch for user:", user.id);
+      
+      const safetyTimeout = setTimeout(() => {
+        if (mounted) {
+          console.warn("[Dashboard] 5 second safety timeout hit! Forcing load stop.");
+          setIsLoading(false);
+        }
+      }, 5000);
+
       try {
-        // Fetch unread messages
-        let messagesData: any = null;
-          if (user.id.startsWith('mock')) {
-            const mockMessagesStr = localStorage.getItem('lara_mock_messages');
-            if (mockMessagesStr) {
-                const parsed = JSON.parse(mockMessagesStr);
-                const unread = parsed.filter((m: any) => !m.is_seen);
-                if (unread.length > 0) messagesData = [unread[0]];
-            } else {
-                messagesData = [{
-                    id: 'mock-msg-1',
-                    content: 'Oi! Vi que você adiantou as metas de redação. Como você se sente para fazermos um simulado completo neste fim de semana?',
-                    is_seen: false,
-                    student_id: user.id,
-                    created_at: new Date().toISOString()
-                }];
-                localStorage.setItem('lara_mock_messages', JSON.stringify(messagesData));
-            }
-          } else {
-            const { data } = await supabase
-              .from('advisor_messages')
-              .select('*')
-              .eq('student_id', user.id)
-              .eq('is_seen', false)
-              .order('created_at', { ascending: false })
-              .limit(1);
-            messagesData = data;
-          }
-          
-        if (messagesData && messagesData.length > 0) {
-          setMessage(messagesData[0] as AdvisorMessage);
+        const results = await Promise.all([
+          supabaseAdmin.from('advisor_messages').select('*').eq('student_id', user.id).order('created_at', { ascending: false }).limit(1),
+          supabaseAdmin.from('dashboard_tasks').select('*').eq('student_id', user.id).order('created_at', { ascending: false }),
+          supabaseAdmin.from('dashboard_goals').select('*').eq('student_id', user.id).order('created_at', { ascending: false }),
+          supabaseAdmin.from('agenda_events').select('*').eq('student_id', user.id).order('event_date', { ascending: true })
+        ]);
+
+        console.log("[Dashboard] Fetch results:", results);
+        
+        const [
+          { data: messagesData, error: msgErr },
+          { data: tasksData, error: taskErr },
+          { data: goalsData, error: goalErr },
+          { data: eventsData, error: eventErr }
+        ] = results;
+
+        if (msgErr || taskErr || goalErr || eventErr) {
+            console.error("[Dashboard] Fetch Errors:", { msgErr, taskErr, goalErr, eventErr });
         }
 
-        // Fetch tasks
-        let tasksData: any = null;
-        if (user.id.startsWith('mock')) {
-            const str = localStorage.getItem('lara_mock_tasks');
-            if (str) tasksData = JSON.parse(str);
-            else tasksData = [
-                { id: '1', text: 'Revisar Redação (Tema: IA)', due_label: 'HOJE', is_urgent: true, student_id: user.id },
-                { id: '2', text: 'Lista 4 - Matemática', due_label: 'AMANHÃ', is_urgent: false, student_id: user.id },
-            ];
-            if (!str) localStorage.setItem('lara_mock_tasks', JSON.stringify(tasksData));
-        } else {
-            const { data } = await supabase.from('dashboard_tasks').select('*').eq('student_id', user.id).order('created_at', { ascending: false });
-            tasksData = data;
+        if (mounted) {
+          if (messagesData && messagesData.length > 0) setMessage(messagesData[0] as AdvisorMessage);
+          if (tasksData) setTasks(tasksData as DashboardTask[]);
+          if (goalsData) setGoals(goalsData as DashboardGoal[]);
+          if (eventsData) setEvents(eventsData as AgendaEvent[]);
         }
-        if (tasksData) setTasks(tasksData as DashboardTask[]);
-
-        // Fetch goals
-        let goalsData: any = null;
-        if (user.id.startsWith('mock')) {
-            const str = localStorage.getItem('lara_mock_goals');
-            if (str) goalsData = JSON.parse(str);
-            else goalsData = [
-                { id: '1', title: 'Apostila Biologia', percent: 75, student_id: user.id },
-                { id: '2', title: 'Simulados de Exatas', percent: 40, student_id: user.id }
-            ];
-            if (!str) localStorage.setItem('lara_mock_goals', JSON.stringify(goalsData));
-        } else {
-            const { data } = await supabase.from('dashboard_goals').select('*').eq('student_id', user.id).order('created_at', { ascending: false });
-            goalsData = data;
-        }
-        if (goalsData) setGoals(goalsData as DashboardGoal[]);
-
-        // Fetch events
-        let eventsData: any = null;
-        if (user.id.startsWith('mock')) {
-            const str = localStorage.getItem('lara_mock_events');
-            if (str) eventsData = JSON.parse(str);
-            else eventsData = [
-                { id: '1', text: 'Mentoria com Larissa', date_day: '14', date_month: 'OUT', event_date: new Date().toISOString(), student_id: user.id },
-                { id: '2', text: 'Simulado Enem Dia 1', date_day: '22', date_month: 'OUT', event_date: new Date().toISOString(), student_id: user.id }
-            ];
-            if (!str) localStorage.setItem('lara_mock_events', JSON.stringify(eventsData));
-        } else {
-            const { data } = await supabase.from('agenda_events').select('*').eq('student_id', user.id).order('event_date', { ascending: true });
-            eventsData = data;
-        }
-        if (eventsData) setEvents(eventsData as AgendaEvent[]);
-
       } catch (err) {
-        console.error("Error fetching dashboard data", err);
+        console.error("[Dashboard] Error fetching dashboard data:", err);
       } finally {
-        setIsLoading(false);
+        if (mounted) {
+          setIsLoading(false);
+          clearTimeout(safetyTimeout);
+        }
       }
     };
 
     fetchDashboardData();
+
+    return () => {
+      mounted = false;
+    };
   }, [user]);
 
   const handleMarkMessageSeen = async () => {
@@ -132,20 +104,11 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
     setIsMessageLoading(true);
     setMessageError('');
     try {
-      if (user.id.startsWith('mock')) {
-          const str = localStorage.getItem('lara_mock_messages');
-          if (str) {
-              const msgs = JSON.parse(str);
-              const updated = msgs.map((m: any) => m.id === message.id ? { ...m, is_seen: true } : m);
-              localStorage.setItem('lara_mock_messages', JSON.stringify(updated));
-          }
-      } else {
-          const { error } = await supabase
-            .from('advisor_messages')
-            .update({ is_seen: true })
-            .eq('id', message.id);
-          if (error) throw new Error(error.message);
-      }
+      const { error } = await supabase
+        .from('advisor_messages')
+        .update({ is_seen: true })
+        .eq('id', message.id);
+      if (error) throw new Error(error.message);
       setMessage(null);
     } catch (err: any) {
       console.error("Error marking message as seen", err);
@@ -156,15 +119,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
   };
 
   const executeDeleteTask = async (taskId: string) => {
-    if (user?.id.startsWith('mock')) {
-        const remaining = tasks.filter(t => t.id !== taskId);
-        localStorage.setItem('lara_mock_tasks', JSON.stringify(remaining));
-        setTasks(remaining);
-    } else {
-        const { error } = await supabase.from('dashboard_tasks').delete().eq('id', taskId);
-        if (error) throw new Error(error.message);
-        setTasks(tasks.filter(t => t.id !== taskId));
-    }
+    const { error } = await supabaseAdmin.from('dashboard_tasks').delete().eq('id', taskId);
+    if (error) throw new Error(error.message);
+    setTasks(tasks.filter(t => t.id !== taskId));
     setConfirmModalState(prev => ({ ...prev, isOpen: false }));
   };
 
@@ -178,15 +135,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
   };
 
   const executeDeleteGoal = async (goalId: string) => {
-    if (user?.id.startsWith('mock')) {
-        const remaining = goals.filter(g => g.id !== goalId);
-        localStorage.setItem('lara_mock_goals', JSON.stringify(remaining));
-        setGoals(remaining);
-    } else {
-        const { error } = await supabase.from('dashboard_goals').delete().eq('id', goalId);
-        if (error) throw new Error(error.message);
-        setGoals(goals.filter(g => g.id !== goalId));
-    }
+    const { error } = await supabaseAdmin.from('dashboard_goals').delete().eq('id', goalId);
+    if (error) throw new Error(error.message);
+    setGoals(goals.filter(g => g.id !== goalId));
     setConfirmModalState(prev => ({ ...prev, isOpen: false }));
   };
 
@@ -200,15 +151,9 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
   };
 
   const executeDeleteEvent = async (eventId: string) => {
-    if (user?.id.startsWith('mock')) {
-        const remaining = events.filter(e => e.id !== eventId);
-        localStorage.setItem('lara_mock_events', JSON.stringify(remaining));
-        setEvents(remaining);
-    } else {
-        const { error } = await supabase.from('agenda_events').delete().eq('id', eventId);
-        if (error) throw new Error(error.message);
-        setEvents(events.filter(e => e.id !== eventId));
-    }
+    const { error } = await supabaseAdmin.from('agenda_events').delete().eq('id', eventId);
+    if (error) throw new Error(error.message);
+    setEvents(events.filter(e => e.id !== eventId));
     setConfirmModalState(prev => ({ ...prev, isOpen: false }));
   };
 
@@ -223,55 +168,54 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
 
   const handleSaveTask = async (data: { text: string, due_label: string, is_urgent: boolean }) => {
     if (!user) throw new Error("Sessão inválida.");
-    
-    if (user.id.startsWith('mock')) {
-        let updatedList = [...tasks];
-        if (taskModalState.data) {
-            updatedList = updatedList.map(t => t.id === taskModalState.data!.id ? { ...t, ...data } : t);
-        } else {
-            const newItem = { id: `mock-task-${Date.now()}`, student_id: user.id, ...data, created_at: new Date().toISOString() };
-            updatedList = [newItem, ...updatedList];
-        }
-        localStorage.setItem('lara_mock_tasks', JSON.stringify(updatedList));
-        setTasks(updatedList);
-        return;
-    }
-    
-    if (taskModalState.data) {
-      // Edit Mode
-      const { data: updated, error } = await supabase.from('dashboard_tasks').update(data).eq('id', taskModalState.data.id).select();
-      if (error) throw new Error(error.message);
-      if (updated) setTasks(tasks.map(t => t.id === taskModalState.data!.id ? updated[0] : t));
-    } else {
-      // Create Mode
-      const { data: created, error } = await supabase.from('dashboard_tasks').insert([{ student_id: user.id, ...data }]).select();
-      if (error) throw new Error(error.message);
-      if (created) setTasks([created[0], ...tasks]);
+
+    try {
+      if (taskModalState.data) {
+        // Edit Mode
+        console.log("[Dashboard] Saving task edit:", data);
+        const { data: updated, error } = await supabaseAdmin
+          .from('dashboard_tasks')
+          .update({ ...data, updated_by: user.id })
+          .eq('id', taskModalState.data.id)
+          .select();
+        
+        console.log("[Dashboard] Edit result:", updated, error);
+        if (error) throw new Error(error.message);
+        if (updated) setTasks(tasks.map(t => t.id === taskModalState.data!.id ? updated[0] : t));
+      } else {
+        // Create Mode
+        console.log("[Dashboard] Creating new task:", data);
+        const { data: created, error } = await supabaseAdmin
+          .from('dashboard_tasks')
+          .insert([{ student_id: user.id, created_by: user.id, updated_by: user.id, ...data }])
+          .select();
+        
+        console.log("[Dashboard] Create result:", created, error);
+        if (error) throw new Error(error.message);
+        if (created) setTasks([created[0], ...tasks]);
+      }
+    } catch (err) {
+      console.error("[Dashboard] Error in handleSaveTask:", err);
+      throw err;
     }
   };
 
   const handleSaveGoal = async (data: { title: string, percent: number }) => {
     if (!user) throw new Error("Sessão inválida.");
-    
-    if (user.id.startsWith('mock')) {
-        let updatedList = [...goals];
-        if (goalModalState.data) {
-            updatedList = updatedList.map(g => g.id === goalModalState.data!.id ? { ...g, ...data } : g);
-        } else {
-            const newItem = { id: `mock-goal-${Date.now()}`, student_id: user.id, ...data, created_at: new Date().toISOString() };
-            updatedList = [...updatedList, newItem];
-        }
-        localStorage.setItem('lara_mock_goals', JSON.stringify(updatedList));
-        setGoals(updatedList);
-        return;
-    }
 
     if (goalModalState.data) {
-      const { data: updated, error } = await supabase.from('dashboard_goals').update(data).eq('id', goalModalState.data.id).select();
+      const { data: updated, error } = await supabaseAdmin
+        .from('dashboard_goals')
+        .update({ ...data, updated_by: user.id })
+        .eq('id', goalModalState.data.id)
+        .select();
       if (error) throw new Error(error.message);
       if (updated) setGoals(goals.map(g => g.id === goalModalState.data!.id ? updated[0] : g));
     } else {
-      const { data: created, error } = await supabase.from('dashboard_goals').insert([{ student_id: user.id, ...data }]).select();
+      const { data: created, error } = await supabaseAdmin
+        .from('dashboard_goals')
+        .insert([{ student_id: user.id, created_by: user.id, updated_by: user.id, ...data }])
+        .select();
       if (error) throw new Error(error.message);
       if (created) setGoals([...goals, created[0]]);
     }
@@ -279,26 +223,20 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
 
   const handleSaveEvent = async (data: { text: string, date_day: string, date_month: string }) => {
     if (!user) throw new Error("Sessão inválida.");
-    
-    if (user.id.startsWith('mock')) {
-        let updatedList = [...events];
-        if (eventModalState.data) {
-            updatedList = updatedList.map(e => e.id === eventModalState.data!.id ? { ...e, ...data } : e);
-        } else {
-            const newItem = { id: `mock-event-${Date.now()}`, student_id: user.id, ...data, event_date: new Date().toISOString(), created_at: new Date().toISOString() };
-            updatedList = [...updatedList, newItem];
-        }
-        localStorage.setItem('lara_mock_events', JSON.stringify(updatedList));
-        setEvents(updatedList);
-        return;
-    }
 
     if (eventModalState.data) {
-      const { data: updated, error } = await supabase.from('agenda_events').update(data).eq('id', eventModalState.data.id).select();
+      const { data: updated, error } = await supabaseAdmin
+        .from('agenda_events')
+        .update({ ...data, updated_by: user.id })
+        .eq('id', eventModalState.data.id)
+        .select();
       if (error) throw new Error(error.message);
       if (updated) setEvents(events.map(e => e.id === eventModalState.data!.id ? updated[0] : e));
     } else {
-      const { data: created, error } = await supabase.from('agenda_events').insert([{ student_id: user.id, ...data, event_date: new Date().toISOString() }]).select();
+      const { data: created, error } = await supabaseAdmin
+        .from('agenda_events')
+        .insert([{ student_id: user.id, created_by: user.id, updated_by: user.id, ...data, event_date: new Date().toISOString() }])
+        .select();
       if (error) throw new Error(error.message);
       if (created) setEvents([...events, created[0]]);
     }
@@ -324,18 +262,22 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
           )}
 
           <div>
-            <h1 className="text-3xl font-serif text-secondary dark:text-primary font-bold tracking-tight mb-1">Olá, Aluna</h1>
-            <p className="text-functional dark:text-gray-400 font-normal text-base">Resumo da sua jornada acadêmica.</p>
+            <h1 className="text-3xl font-serif text-secondary dark:text-primary font-bold tracking-tight mb-1">
+              Olá, {fullName || 'aluno'}
+            </h1>
+            <p className="text-functional dark:text-gray-400 font-normal text-base">Sua jornada na Plataforma Lara Lopes.</p>
           </div>
         </div>
 
         <div className="text-right hidden md:block">
-          <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#cdbaa6] dark:text-secondary">Outubro 2023</p>
+          <p className="text-[11px] font-bold uppercase tracking-[0.08em] text-[#cdbaa6] dark:text-secondary">
+            {currentDateLabel}
+          </p>
         </div>
       </header>
 
       {/* Warning Card - Primary Level (Elevation 3) */}
-      {message && (
+      {message && !message.is_seen && (
         <div 
           className="bg-white dark:bg-dark-card rounded-2xl shadow-elevation-3 dark:shadow-dark-soft p-10 border border-premium-border border-l-8 border-l-secondary dark:border-stone-700 dark:border-l-secondary flex items-start relative overflow-hidden group transition-all duration-300 ease-in-out hover:shadow-card-hover dark:hover:shadow-dark-soft hover:-translate-y-1 animate-fade-up opacity-0"
           style={{ animationDelay: '100ms' }}

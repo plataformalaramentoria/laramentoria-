@@ -6,18 +6,17 @@ import {
   BookOpen,
   GraduationCap,
   Languages,
-  Library,
-  MessageSquare,
   Bot,
   UserCircle,
   X,
   LogOut,
-  Users,
   Moon,
   Sun,
   PanelLeftClose,
-  MonitorPlay
+  MonitorPlay,
+  Shield
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { ViewState, Role } from '../types';
 
 interface SidebarProps {
@@ -42,10 +41,12 @@ const Sidebar: React.FC<SidebarProps> = ({
   setIsMobileOpen,
   isDarkMode,
   toggleTheme,
-  isOpen = true, // Default to true if not provided
+  isOpen = true,
   onToggle
 }) => {
-  const menuItems = [
+  const { accessType } = useAuth();
+
+  const allItems = [
     { id: 'DASHBOARD', label: 'Início', icon: LayoutDashboard },
     { id: 'PROGRESS', label: 'Meu Progresso', icon: TrendingUp },
     { id: 'EDITAIS', label: 'Editais', icon: FileText },
@@ -54,13 +55,21 @@ const Sidebar: React.FC<SidebarProps> = ({
     { id: 'LANGUAGE', label: 'Prova de Língua', icon: Languages },
     { id: 'WORKBOOK', label: 'Apostilas', icon: BookOpen },
     { id: 'COURSES', label: 'Cursos', icon: MonitorPlay },
-    { id: 'MESSAGES', label: 'Mensagens', icon: MessageSquare },
     { id: 'AI', label: 'Lara.IA', icon: Bot },
     { id: 'PROFILE', label: 'Perfil', icon: UserCircle },
   ];
 
-  if (role === 'PROFESSOR') {
-    menuItems.push({ id: 'PROFESSOR_PANEL', label: 'Painel da Professora', icon: Users });
+  // Filter items based on access type
+  const menuItems = allItems.filter(item => {
+    if (role === 'ADMIN' || role === 'PROFESSOR') return true;
+    if (accessType === 'RESTRICTED') {
+        return ['COURSES', 'PROFILE'].includes(item.id);
+    }
+    return true;
+  });
+
+  if (role === 'PROFESSOR' || role === 'ADMIN') {
+    menuItems.push({ id: 'PROFESSOR_PANEL', label: 'Painel de Administração', icon: Shield });
   }
 
   const handleNav = (id: string) => {
@@ -100,10 +109,10 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div className="h-24 flex items-center justify-between px-6 mb-2 min-w-[18rem]">
           <div className="flex flex-col whitespace-nowrap">
             <span className="font-serif font-semibold text-2xl text-secondary dark:text-primary tracking-tight">
-              Mentoria
+              Plataforma
             </span>
             <span className="text-[10px] uppercase tracking-widest text-[#cdbaa6] font-bold mt-1">
-              Mestrado
+              Lara Lopes
             </span>
           </div>
 

@@ -9,17 +9,8 @@ import { Message, User as UserType } from '../types';
 // --- Types & Mock Data ---
 
 // Mock Users for Professor View
-const MOCK_STUDENTS = [
-    { id: 'student-1', name: 'Ana Luiza', avatar: 'AL', lastMessage: 'Professora, enviei a dúvida sobre a metodologia.', time: '10:30', unread: 2 },
-    { id: 'student-2', name: 'Carlos Eduardo', avatar: 'CE', lastMessage: 'Obrigado pelo feedback!', time: 'Ontem', unread: 0 },
-    { id: 'student-3', name: 'Mariana Silva', avatar: 'MS', lastMessage: 'Quando sai o resultado do edital?', time: 'Ontem', unread: 0 },
-];
-
-const INITIAL_MESSAGES: Message[] = [
-    { id: '1', senderId: 'student-1', receiverId: 'professor', content: 'Olá professora, tudo bem?', timestamp: '2025-01-20T10:00:00', read: true },
-    { id: '2', senderId: 'professor', receiverId: 'student-1', content: 'Olá Ana! Tudo ótimo. Como posso ajudar?', timestamp: '2025-01-20T10:05:00', read: true },
-    { id: '3', senderId: 'student-1', receiverId: 'professor', content: 'Estou com dúvida na estruturação dos objetivos específicos.', timestamp: '2025-01-20T10:10:00', read: true },
-];
+const MOCK_STUDENTS: any[] = [];
+const INITIAL_MESSAGES: Message[] = [];
 
 export const MessagesScreen: React.FC = () => {
     const { role, session } = useAuth(); // session.user.id would be the ideal ID source

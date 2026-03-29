@@ -3,8 +3,9 @@ import {
   Bot, Send, Sparkles, Loader2, BookOpen, FileSearch, MessageSquare,
   Plus, MessageCircle, Trash2, Menu, X
 } from 'lucide-react';
-import { sendMessageToAI } from '../services/geminiService';
+import { sendMessageToAI, ChatMessage as AIChatMessage } from '../services/geminiService';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { supabase } from '../services/supabaseClient';
 
 interface Message {
   id: string;
@@ -22,20 +23,17 @@ interface ChatSession {
 const DEFAULT_WELCOME_MSG: Message = {
   id: 'welcome',
   role: 'ai',
-  content: 'Olá! Sou a LARA, sua assistente acadêmica. Posso ajudar com revisão de textos, análise de editais ou simulação de bancas. Como posso auxiliar seus estudos hoje?'
+  content: 'Olá! Sou a LARA, sua assistente na Plataforma Lara Lopes. Posso ajudar com revisão de textos, análise de editais ou simulação de bancas. Como posso auxiliar seus estudos hoje?'
 };
 
 export const AIAssistant: React.FC = () => {
   // --- State ---
-  const [chats, setChats] = useState<ChatSession[]>(() => {
-    const saved = localStorage.getItem('lara_chats');
-    return saved ? JSON.parse(saved) : [];
-  });
-
+  const [chats, setChats] = useState<ChatSession[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true); // Mobile/Desktop toggle
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
 
   // Modals
   const [deleteData, setDeleteData] = useState<{ isOpen: boolean, chatId: string | null }>({ isOpen: false, chatId: null });
@@ -48,40 +46,108 @@ export const AIAssistant: React.FC = () => {
 
   // --- Effects ---
 
-  // Persistence
+  // Initial Load from Supabase
   useEffect(() => {
-    localStorage.setItem('lara_chats', JSON.stringify(chats));
-  }, [chats]);
+    const fetchChats = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        // Fetch Sessions
+        const { data: sessions, error: sessionsError } = await supabase
+          .from('ai_chat_sessions')
+          .select('*')
+          .order('updated_at', { ascending: false });
+
+        if (sessionsError) throw sessionsError;
+
+        if (sessions && sessions.length > 0) {
+          const formattedChats: ChatSession[] = await Promise.all(sessions.map(async (s) => {
+            // Fetch Messages for each session
+            const { data: msgs, error: msgsError } = await supabase
+              .from('ai_chat_messages')
+              .select('*')
+              .eq('session_id', s.id)
+              .order('created_at', { ascending: true });
+
+            if (msgsError) throw msgsError;
+
+            return {
+              id: s.id,
+              title: s.title,
+              messages: msgs && msgs.length > 0 
+                ? msgs.map(m => ({ id: m.id, role: m.role as 'user' | 'ai', content: m.content }))
+                : [DEFAULT_WELCOME_MSG],
+              updatedAt: new Date(s.updated_at).getTime()
+            };
+          }));
+
+          setChats(formattedChats);
+          setCurrentChatId(formattedChats[0].id);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar chats:", error);
+      } finally {
+        setIsInitialLoading(false);
+      }
+    };
+
+    fetchChats();
+  }, []);
 
   // Auto-scroll
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, currentChatId]);
 
-  // If no chats, or valid current ID not found, maybe reset? 
-  // Actually, if no chats, we just show welcome state.
-
   // --- Actions ---
 
-  const createNewChat = () => {
-    const newChat: ChatSession = {
-      id: Date.now().toString(),
-      title: 'Nova Conversa',
-      messages: [DEFAULT_WELCOME_MSG],
-      updatedAt: Date.now()
-    };
-    setChats([newChat, ...chats]);
-    setCurrentChatId(newChat.id);
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
+  const createNewChat = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: session, error } = await supabase
+        .from('ai_chat_sessions')
+        .insert([{ user_id: user.id, title: 'Nova Conversa' }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const newChat: ChatSession = {
+        id: session.id,
+        title: session.title,
+        messages: [DEFAULT_WELCOME_MSG],
+        updatedAt: Date.now()
+      };
+
+      setChats([newChat, ...chats]);
+      setCurrentChatId(newChat.id);
+      if (window.innerWidth < 768) setIsSidebarOpen(false);
+    } catch (error) {
+      console.error("Erro ao criar chat:", error);
+    }
   };
 
-  const deleteChat = () => {
+  const deleteChat = async () => {
     if (deleteData.chatId) {
-      const newChats = chats.filter(c => c.id !== deleteData.chatId);
-      setChats(newChats);
+      try {
+        const { error } = await supabase
+          .from('ai_chat_sessions')
+          .delete()
+          .eq('id', deleteData.chatId);
 
-      if (currentChatId === deleteData.chatId) {
-        setCurrentChatId(newChats.length > 0 ? newChats[0].id : null);
+        if (error) throw error;
+
+        const newChats = chats.filter(c => c.id !== deleteData.chatId);
+        setChats(newChats);
+
+        if (currentChatId === deleteData.chatId) {
+          setCurrentChatId(newChats.length > 0 ? newChats[0].id : null);
+        }
+      } catch (error) {
+        console.error("Erro ao excluir chat:", error);
       }
     }
     setDeleteData({ isOpen: false, chatId: null });
@@ -94,66 +160,100 @@ export const AIAssistant: React.FC = () => {
     setInput('');
     setIsLoading(true);
 
-    // If no chat selected, create one implicitly
     let activeChatId = currentChatId;
-    let newChats = [...chats];
+    let currentChats = [...chats];
 
-    if (!activeChatId) {
-      const newChat: ChatSession = {
-        id: Date.now().toString(),
-        title: userContent.slice(0, 30) + (userContent.length > 30 ? '...' : ''), // Auto title
-        messages: [DEFAULT_WELCOME_MSG],
-        updatedAt: Date.now()
-      };
-      newChats = [newChat, ...chats]; // Prepend
-      activeChatId = newChat.id;
-    } else {
-      // Update existing chat order
-      const chatIndex = newChats.findIndex(c => c.id === activeChatId);
-      if (chatIndex > -1) {
-        const updatedChat = { ...newChats[chatIndex], updatedAt: Date.now() };
-        // Rename if generic title
-        if (updatedChat.title === 'Nova Conversa') {
-          updatedChat.title = userContent.slice(0, 30) + (userContent.length > 30 ? '...' : '');
-        }
-        newChats.splice(chatIndex, 1);
-        newChats.unshift(updatedChat);
-      }
-    }
-
-    // Add User Message
-    const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userContent };
-
-    // Update State Optimistically
-    const chatIndex = newChats.findIndex(c => c.id === activeChatId);
-    if (chatIndex !== -1) {
-      newChats[chatIndex].messages.push(userMessage);
-    }
-    setChats(newChats);
-    setCurrentChatId(activeChatId);
-
-    // Call API
     try {
-      const history = newChats[chatIndex].messages.map(m => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content }]
-      })) as any[];
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Usuário não autenticado");
 
-      const aiResponseText = await sendMessageToAI(userContent, history);
+      // 1. Ensure Session Exists
+      if (!activeChatId) {
+        const { data: session, error: sessionError } = await supabase
+          .from('ai_chat_sessions')
+          .insert([{ user_id: user.id, title: userContent.slice(0, 30) + (userContent.length > 30 ? '...' : '') }])
+          .select()
+          .single();
 
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'ai',
-        content: aiResponseText
-      };
+        if (sessionError) throw sessionError;
+        activeChatId = session.id;
+        
+        const newChat: ChatSession = {
+          id: session.id,
+          title: session.title,
+          messages: [DEFAULT_WELCOME_MSG],
+          updatedAt: Date.now()
+        };
+        currentChats = [newChat, ...chats];
+        setChats(currentChats);
+        setCurrentChatId(activeChatId);
+      }
 
-      // Update with AI response
-      const finalsChats = [...newChats]; // Re-clone to trigger render
-      finalsChats[0].messages.push(aiMessage); // Moved to top so index 0
-      setChats(finalsChats);
+      // 2. Save User Message to DB
+      const { data: userMsgData, error: userMsgError } = await supabase
+        .from('ai_chat_messages')
+        .insert([{ session_id: activeChatId, role: 'user', content: userContent }])
+        .select()
+        .single();
+
+      if (userMsgError) throw userMsgError;
+
+      // Update Local State Optimistically
+      const chatIndex = currentChats.findIndex(c => c.id === activeChatId);
+      if (chatIndex !== -1) {
+        const updatedMessages = [...currentChats[chatIndex].messages, { id: userMsgData.id, role: 'user', content: userContent } as Message];
+        
+        // Update Title if it was generic
+        let updatedTitle = currentChats[chatIndex].title;
+        if (updatedTitle === 'Nova Conversa') {
+          updatedTitle = userContent.slice(0, 30) + (userContent.length > 30 ? '...' : '');
+          await supabase.from('ai_chat_sessions').update({ title: updatedTitle }).eq('id', activeChatId);
+        }
+
+        const updatedChat = { ...currentChats[chatIndex], messages: updatedMessages, title: updatedTitle, updatedAt: Date.now() };
+        const newChatsState = [...currentChats];
+        newChatsState[chatIndex] = updatedChat;
+        // Move to top
+        newChatsState.splice(chatIndex, 1);
+        newChatsState.unshift(updatedChat);
+        setChats(newChatsState);
+      }
+
+      // 3. Call AI API
+      // Filtrar a mensagem de boas-vindas e a mensagem atual do histórico enviado para a API
+      const aiHistory: AIChatMessage[] = currentChats[chatIndex].messages
+        .filter(m => m.id !== 'welcome' && m.id !== userMsgData.id)
+        .map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.content }]
+        }));
+
+      const aiResponseText = await sendMessageToAI(userContent, aiHistory);
+
+      // 4. Save AI Response to DB
+      const { data: aiMsgData, error: aiMsgError } = await supabase
+        .from('ai_chat_messages')
+        .insert([{ session_id: activeChatId, role: 'ai', content: aiResponseText }])
+        .select()
+        .single();
+
+      if (aiMsgError) throw aiMsgError;
+
+      // 5. Update Local State with AI Message
+      setChats(prev => {
+        const index = prev.findIndex(c => c.id === activeChatId);
+        if (index === -1) return prev;
+        const newChats = [...prev];
+        newChats[index] = {
+          ...newChats[index],
+          messages: [...newChats[index].messages, { id: aiMsgData.id, role: 'ai', content: aiResponseText } as Message],
+          updatedAt: Date.now()
+        };
+        return newChats;
+      });
+
     } catch (error) {
-      console.error("Erro na IA", error);
-      // Error handling visual could be added here
+      console.error("Erro na IA ou Banco de Dados:", error);
     } finally {
       setIsLoading(false);
     }
@@ -164,6 +264,14 @@ export const AIAssistant: React.FC = () => {
     { label: "Analisar Edital", prompt: "Quais documentos são obrigatórios neste edital?", icon: FileSearch },
     { label: "Simular Banca", prompt: "Faça uma pergunta sobre minha metodologia.", icon: MessageSquare },
   ];
+
+  if (isInitialLoading) {
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-white dark:bg-dark-card rounded-2xl border border-premium-border dark:border-stone-700">
+        <Loader2 className="animate-spin text-secondary dark:text-primary" size={40} />
+      </div>
+    );
+  }
 
   return (
     <div className="h-[calc(100vh-6rem)] md:h-[calc(100vh-8rem)] flex bg-white dark:bg-dark-card rounded-2xl border border-premium-border dark:border-stone-700 shadow-card dark:shadow-none overflow-hidden animate-fade-in relative">
@@ -233,8 +341,8 @@ export const AIAssistant: React.FC = () => {
               <Bot size={20} />
             </div>
             <div>
-              <h2 className="font-serif font-bold text-gray-800 dark:text-gray-100 text-lg">LARA.IA</h2>
-              <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Assistente Acadêmica</p>
+              <h2 className="font-serif font-bold text-gray-800 dark:text-gray-100 text-lg">LARA LOPES</h2>
+              <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Plataforma Digital</p>
             </div>
           </div>
         </div>
@@ -242,7 +350,7 @@ export const AIAssistant: React.FC = () => {
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-6 scroll-smooth">
           {messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-scale-in`}>
+            <div key={msg.id || idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-scale-in`}>
               <div className={`
                          max-w-[85%] md:max-w-[75%] p-5 rounded-2xl text-sm leading-relaxed shadow-sm
                          ${msg.role === 'user'

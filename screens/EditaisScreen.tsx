@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     Folder,
     FileText,
@@ -18,7 +18,7 @@ import { ConfirmModal } from '../components/ConfirmModal';
 
 export const EditaisScreen: React.FC = () => {
     const { user, role } = useAuth();
-    const isAdmin = role === 'PROFESSOR' || role === 'ADMIN';
+    const isAdmin = role === 'ADMIN';
 
     const [folders, setFolders] = useState<NoticeFolder[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -35,52 +35,70 @@ export const EditaisScreen: React.FC = () => {
         isOpen: false, title: '', message: '', action: () => {}
     });
 
+    const isFetchingRef = useRef<boolean>(false);
+
     const fetchEditaisData = async () => {
-        if (!user) return;
+        if (!user || isFetchingRef.current) return;
+        
+        isFetchingRef.current = true;
         setIsLoading(true);
-        try {
-            if (user.id.startsWith('mock')) {
-                const fStr = localStorage.getItem('lara_notice_folders');
-                const nStr = localStorage.getItem('lara_notices');
-                const mockFolders: NoticeFolder[] = fStr ? JSON.parse(fStr) : [];
-                const mockNotices: Notice[] = nStr ? JSON.parse(nStr) : [];
-                
-                // RBAC for mock student
-                const filteredNotices = isAdmin ? mockNotices : mockNotices.filter(n => n.visibility_type === 'ALL' || n.visible_students.includes(user.id));
-                
-                const combined = mockFolders.map(folder => ({
-                    ...folder,
-                    notices: filteredNotices.filter(notice => notice.folder_id === folder.id)
-                }));
-                // Only show folders to students if they have visible files, or show all to admin
-                setFolders(isAdmin ? combined : combined.filter(f => (f.notices?.length || 0) > 0));
-                
-                // Load mock students to appear in the select list
-                setStudents([{id: 'mock-user-id-student', name: 'João Vilela (Test)'}]);
-                
-            } else {
-                const { data: dbFolders, error: err1 } = await supabase.from('notice_folders').select('*').order('created_at', { ascending: false });
-                if (err1) throw err1;
-                
-                const { data: dbNotices, error: err2 } = await supabase.from('notices').select('*').order('created_at', { ascending: false });
-                if (err2) throw err2;
 
-                const combined = (dbFolders || []).map(folder => ({
-                    ...folder,
-                    notices: (dbNotices || []).filter(notice => notice.folder_id === folder.id)
-                }));
-                
-                setFolders(isAdmin ? combined : combined.filter(f => (f.notices?.length || 0) > 0));
-
-                if (isAdmin) {
-                    const { data: proflist } = await supabase.from('profiles').select('id, full_name, role').eq('role', 'STUDENT');
-                    if (proflist) setStudents(proflist.map(p => ({ id: p.id, name: p.full_name || 'Sem Nome' })));
-                }
-            }
-        } catch (err) {
-            console.error("Error fetching editais:", err);
-        } finally {
+        const timeoutId = setTimeout(() => {
             setIsLoading(false);
+            isFetchingRef.current = false;
+        }, 8000);
+
+        try {
+            // Buscas paralelas seguras (agora que o AuthContext não trava mais o SDK)
+            const [foldersRes, noticesRes] = await Promise.all([
+                supabase.from('notice_folders').select('*').order('name', { ascending: true }),
+                supabase.from('notices').select('*').order('created_at', { ascending: false })
+            ]);
+
+            if (foldersRes.error) throw foldersRes.error;
+            if (noticesRes.error) throw noticesRes.error;
+
+            const dbFolders = foldersRes.data || [];
+            const rawNotices = noticesRes.data || [];
+            
+            // --- FILTRO DE SEGURANÇA JS ---
+            const dbNotices = rawNotices.filter((notice: any) => {
+                if (isAdmin) return true;
+                if (notice.visibility_type === 'ALL') return true;
+                
+                let allowedList = notice.visible_students;
+                if (typeof allowedList === 'string') {
+                    try { allowedList = JSON.parse(allowedList); } catch(e) {}
+                }
+                if (Array.isArray(allowedList) && user?.id) {
+                    return allowedList.includes(user.id);
+                }
+                return false;
+            });
+
+            const combined = dbFolders.map(folder => ({
+                ...folder,
+                notices: dbNotices.filter(notice => notice.folder_id === folder.id)
+            }));
+            
+            // Oculta pastas sem conteúdo para alunos
+            const visibleOnly = combined.filter(f => {
+                if (isAdmin) return true;
+                return (f.notices?.length || 0) > 0;
+            });
+
+            setFolders(visibleOnly);
+
+            if (isAdmin || role === 'PROFESSOR') {
+                const { data: proflist } = await supabase.from('profiles').select('id, full_name').eq('role', 'STUDENT');
+                if (proflist) setStudents(proflist.map(p => ({ id: p.id, name: p.full_name || 'Sem Nome' })));
+            }
+        } catch (err: any) {
+            console.error("Erro ao carregar editais:", err);
+        } finally {
+            clearTimeout(timeoutId);
+            setIsLoading(false);
+            isFetchingRef.current = false;
         }
     };
 
@@ -89,30 +107,21 @@ export const EditaisScreen: React.FC = () => {
     }, [user, role]);
 
     // --- Actions: Folders ---
-    const handleSaveFolder = async (name: string) => {
-        if (!user) throw new Error("Sem sessão.");
-        
-        if (user.id.startsWith('mock')) {
-            const mockFolders = JSON.parse(localStorage.getItem('lara_notice_folders') || '[]');
+    const handleSaveFolder = async (data: { name: string }) => {
+        if (!user) return;
+        try {
             if (folderModal.data) {
-                const updated = mockFolders.map((f: any) => f.id === folderModal.data!.id ? { ...f, name } : f);
-                localStorage.setItem('lara_notice_folders', JSON.stringify(updated));
+                const { error } = await supabase.from('notice_folders').update(data).eq('id', folderModal.data.id);
+                if (error) throw error;
             } else {
-                const newFolder = { id: `mock-folder-${Date.now()}`, name, created_at: new Date().toISOString() };
-                localStorage.setItem('lara_notice_folders', JSON.stringify([...mockFolders, newFolder]));
+                const { error } = await supabase.from('notice_folders').insert([data]);
+                if (error) throw error;
             }
+            setFolderModal({ isOpen: false });
             fetchEditaisData();
-            return;
+        } catch (err) {
+            console.error('Error saving folder:', err);
         }
-
-        if (folderModal.data) {
-            const { error } = await supabase.from('notice_folders').update({ name }).eq('id', folderModal.data.id);
-            if (error) throw new Error(error.message);
-        } else {
-            const { error } = await supabase.from('notice_folders').insert([{ name }]);
-            if (error) throw new Error(error.message);
-        }
-        fetchEditaisData();
     };
 
     const executeDeleteFolder = async (folderId: string) => {
@@ -123,124 +132,86 @@ export const EditaisScreen: React.FC = () => {
             return;
         }
 
-        if (user?.id.startsWith('mock')) {
-            const mockFolders = JSON.parse(localStorage.getItem('lara_notice_folders') || '[]');
-            localStorage.setItem('lara_notice_folders', JSON.stringify(mockFolders.filter((f:any) => f.id !== folderId)));
-        } else {
+        try {
             const { error } = await supabase.from('notice_folders').delete().eq('id', folderId);
-            if (error) throw new Error(error.message);
+            if (error) throw error;
+            
+            setConfirmModal({ isOpen: false, title: '', message: '', action: () => {} });
+            if (currentFolderId === folderId) setCurrentFolderId(null);
+            fetchEditaisData();
+        } catch (err) {
+            console.error('Error deleting folder:', err);
         }
-        fetchEditaisData();
-        if (currentFolderId === folderId) setCurrentFolderId(null);
-        setConfirmModal(prev => ({ ...prev, isOpen: false }));
     };
 
     // --- Actions: Files ---
     const handleSaveNotice = async (data: { title: string, description: string | null, file: File | null, visibility_type: 'ALL'|'SPECIFIC', visible_students: string[] }) => {
         if (!user) throw new Error("Sem sessão.");
-        
         const folderId = uploadModal.folderId;
 
-        if (user.id.startsWith('mock')) {
-            const mockNotices = JSON.parse(localStorage.getItem('lara_notices') || '[]');
-            if (uploadModal.data) {
-                const updated = mockNotices.map((n: any) => n.id === uploadModal.data!.id ? { 
-                    ...n, 
-                    title: data.title, 
-                    description: data.description, 
-                    visibility_type: data.visibility_type, 
-                    visible_students: data.visible_students 
-                } : n);
-                localStorage.setItem('lara_notices', JSON.stringify(updated));
-            } else {
-                if (!data.file) throw new Error("Arquivo obrigatório no mock");
-                const newNotice = { 
-                    id: `mock-notice-${Date.now()}`, 
-                    folder_id: folderId,
-                    title: data.title,
-                    description: data.description,
-                    visibility_type: data.visibility_type,
-                    visible_students: data.visible_students,
-                    file_url: 'dummy_url',
-                    file_path: data.file.name,
-                    file_size: `${(data.file.size / 1024 / 1024).toFixed(2)} MB`,
-                    created_at: new Date().toISOString() 
-                };
-                localStorage.setItem('lara_notices', JSON.stringify([...mockNotices, newNotice]));
+        try {
+            let fileUrl = uploadModal.data?.file_url;
+            let filePath = uploadModal.data?.file_path;
+            let fileSize = uploadModal.data?.file_size;
+
+            if (data.file) {
+                const ext = data.file.name.split('.').pop();
+                const newFileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
+                const { error: uploadError } = await supabase.storage.from('notices').upload(newFileName, data.file);
+                
+                if (uploadError) throw uploadError;
+
+                filePath = newFileName;
+                const { data: publicUrlData } = supabase.storage.from('notices').getPublicUrl(newFileName);
+                fileUrl = publicUrlData.publicUrl;
+                fileSize = `${(data.file.size / 1024 / 1024).toFixed(2)} MB`;
+
+                if (uploadModal.data?.file_path) {
+                    await supabase.storage.from('notices').remove([uploadModal.data.file_path]);
+                }
             }
-            fetchEditaisData();
-            return;
-        }
 
-        // Real Supabase Flow
-        let fileUrl = uploadModal.data?.file_url;
-        let filePath = uploadModal.data?.file_path;
-        let fileSize = uploadModal.data?.file_size;
-
-        if (data.file) {
-            const ext = data.file.name.split('.').pop();
-            const newFileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${ext}`;
-            const { data: uploadData, error: uploadError } = await supabase.storage.from('notices').upload(newFileName, data.file);
-            
-            if (uploadError) throw new Error(`Falha no upload: ${uploadError.message}`);
-
-            filePath = newFileName;
-            const { data: publicUrlData } = supabase.storage.from('notices').getPublicUrl(newFileName);
-            fileUrl = publicUrlData.publicUrl;
-            fileSize = `${(data.file.size / 1024 / 1024).toFixed(2)} MB`;
-
-            // Delete old file if updating
-            if (uploadModal.data && uploadModal.data.file_path) {
-                await supabase.storage.from('notices').remove([uploadModal.data.file_path]);
-            }
-        }
-
-        if (uploadModal.data) {
-            const { error } = await supabase.from('notices').update({
+            const payload = {
                 title: data.title,
                 description: data.description,
                 visibility_type: data.visibility_type,
                 visible_students: data.visible_students,
                 file_url: fileUrl,
                 file_path: filePath,
-                file_size: fileSize
-            }).eq('id', uploadModal.data.id);
-            if (error) throw new Error(error.message);
-        } else {
-            const { error } = await supabase.from('notices').insert([{
-                folder_id: folderId,
-                title: data.title,
-                description: data.description,
-                visibility_type: data.visibility_type,
-                visible_students: data.visible_students,
-                file_url: fileUrl,
-                file_path: filePath!,
-                file_size: fileSize
-            }]);
-            if (error) throw new Error(error.message);
+                file_size: fileSize,
+                folder_id: folderId
+            };
+
+            if (uploadModal.data) {
+                const { error } = await supabase.from('notices').update(payload).eq('id', uploadModal.data.id);
+                if (error) throw error;
+            } else {
+                const { error } = await supabase.from('notices').insert([payload]);
+                if (error) throw error;
+            }
+
+            setUploadModal({ isOpen: false, folderId: '' });
+            fetchEditaisData();
+        } catch (err) {
+            console.error('Error saving notice:', err);
         }
-        fetchEditaisData();
     };
 
     const executeDeleteNotice = async (noticeId: string) => {
         const notice = folders.flatMap(f => f.notices || []).find(n => n.id === noticeId);
-        
-        if (user?.id.startsWith('mock')) {
-            const mockNotices = JSON.parse(localStorage.getItem('lara_notices') || '[]');
-            localStorage.setItem('lara_notices', JSON.stringify(mockNotices.filter((n:any) => n.id !== noticeId)));
-        } else if (notice) {
-            await supabase.storage.from('notices').remove([notice.file_path]);
+        try {
+            if (notice?.file_path) {
+                await supabase.storage.from('notices').remove([notice.file_path]);
+            }
             const { error } = await supabase.from('notices').delete().eq('id', noticeId);
-            if (error) throw new Error(error.message);
+            if (error) throw error;
+            
+            setConfirmModal({ isOpen: false, title: '', message: '', action: () => {} });
+            fetchEditaisData();
+        } catch (err) {
+            console.error('Error deleting notice:', err);
         }
-        fetchEditaisData();
-        setConfirmModal(prev => ({ ...prev, isOpen: false }));
     };
-
-    const downloadFakeFile = (fileName: string) => {
-        alert(`Disparando download simulado de: ${fileName}`);
-    };
-
 
     // --- Render Helpers ---
     const currentFolder = folders.find(f => f.id === currentFolderId);
@@ -280,7 +251,7 @@ export const EditaisScreen: React.FC = () => {
                     <p className="text-gray-500 dark:text-gray-400 mt-1">
                         {currentFolder
                             ? `${(currentFolder.notices || []).length} arquivos nesta pasta`
-                            : 'Gerencie e consulte todos os editais e templates do programa.'}
+                            : 'Consulte a biblioteca de editais e diretrizes do programa.'}
                     </p>
                 </div>
 
@@ -404,15 +375,9 @@ export const EditaisScreen: React.FC = () => {
                                     </div>
 
                                     <div className="flex items-center gap-2 justify-end mt-2 md:mt-0">
-                                        {user?.id.startsWith('mock') ? (
-                                            <button onClick={() => downloadFakeFile(file.file_path)} className="flex items-center justify-center gap-2 px-4 py-2 text-sm font-bold text-gray-600 bg-surface dark:text-gray-300 dark:bg-stone-800 hover:text-secondary hover:bg-secondary/10 rounded-lg transition-colors w-full md:w-auto">
-                                                <Download size={16} /> Download
-                                            </button>
-                                        ) : (
-                                            <a href={file.file_url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 px-4 py-2 text-sm font-bold text-gray-600 bg-surface dark:text-gray-300 dark:bg-stone-800 hover:text-secondary hover:bg-secondary/10 rounded-lg transition-colors w-full md:w-auto">
-                                                <Download size={16} /> Abrir
-                                            </a>
-                                        )}
+                                        <a href={file.file_url} target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 px-4 py-2 text-sm font-bold text-gray-600 bg-surface dark:text-gray-300 dark:bg-stone-800 hover:text-secondary hover:bg-secondary/10 rounded-lg transition-colors w-full md:w-auto">
+                                            <Download size={16} /> Abrir
+                                        </a>
 
                                         {isAdmin && (
                                             <div className="flex items-center gap-1 border-l border-gray-200 dark:border-stone-700 pl-2 ml-2">

@@ -1,367 +1,678 @@
-import React, { useState } from 'react';
-import { Clock, CheckCircle, XCircle, Play, ArrowLeft, BarChart2, BookOpen, AlertCircle, Edit2, Plus, Trash2, Save, MoreVertical, Eye, EyeOff } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { 
+  Clock, CheckCircle, XCircle, Play, ArrowLeft, BarChart2, BookOpen, 
+  AlertCircle, Edit2, Plus, Trash2, Save, MoreVertical, Eye, EyeOff,
+  ChevronRight, Award, History, TrendingUp, Users, Calendar, Filter
+} from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { supabase } from '../services/supabaseClient';
+import { 
+  LanguageExam as LanguageExamType, 
+  LanguageQuestion, 
+  LanguageExamAttempt,
+  LanguageExamAnswer 
+} from '../types';
 
-// --- Types ---
-interface Question {
-  id: number;
-  text: string;
-  options: string[];
-  correct: number;
-  explanation: string;
-}
-
-interface Exam {
-  id: string;
-  title: string;
-  description: string;
-  language: 'ENGLISH' | 'SPANISH';
-  questions: Question[];
-  durationMinutes: number;
-  status: 'DRAFT' | 'PUBLISHED' | 'INACTIVE';
-}
-
-interface ExamResult {
-  examId: string;
+// --- Local Interfaces for internal UI states ---
+interface MappedAttempt extends LanguageExamAttempt {
   examTitle: string;
   date: string;
-  score: number;
-  totalQuestions: number;
-  answers: number[];
 }
 
-// --- Mock Data ---
-const INITIAL_EXAMS: Exam[] = [
-  {
-    id: 'eng-01',
-    title: 'Simulado Rápido: Leitura Acadêmica',
-    description: '10 questões focadas em interpretação de textos científicos e vocabulário acadêmico.',
-    language: 'ENGLISH',
-    durationMinutes: 30,
-    status: 'PUBLISHED',
-    questions: [
-      {
-        id: 1,
-        text: "Select the option that best completes the sentence: 'The results of the study were ________ with previous findings.'",
-        options: ["inconsistent", "consistent", "consisting", "inconsist"],
-        correct: 1,
-        explanation: "'Consistent with' is the correct collocation meaning in agreement with."
-      },
-      {
-        id: 2,
-        text: "Identify the synonym for 'ubiquitous' in an academic context.",
-        options: ["Rare", "Omnipresent", "Hidden", "Specific"],
-        correct: 1,
-        explanation: "Ubiquitous means found everywhere."
-      },
-      {
-        id: 3,
-        text: "Which transitional phrase best indicates a contrast?",
-        options: ["Furthermore", "In addition", "However", "Consequently"],
-        correct: 2,
-        explanation: "'However' is the standard transition to introduce a contrasting idea."
-      }
-    ]
-  },
-  {
-    id: 'eng-02',
-    title: 'Simulado Completo: Gramática Avançada',
-    description: 'Teste seus conhecimentos em estruturas complexas, voz passiva e conectivos.',
-    language: 'ENGLISH',
-    durationMinutes: 60,
-    status: 'DRAFT',
-    questions: [
-      {
-        id: 1,
-        text: "Choose the correct passive voice form: 'The committee ________ the proposal yesterday.'",
-        options: ["reviews", "was reviewed", "reviewed", "has reviewed"],
-        correct: 2,
-        explanation: "Active voice 'reviewed' fits best here as the committee performed the action."
-      }
-    ]
-  }
-];
-
-const MOCK_HISTORY: ExamResult[] = [
-  {
-    examId: 'eng-01',
-    examTitle: 'Simulado Rápido: Leitura Acadêmica',
-    date: '20/01/2025',
-    score: 2,
-    totalQuestions: 3,
-    answers: [1, 0, 2]
-  }
-];
-
 const LanguageExam: React.FC = () => {
-  const { role } = useAuth();
-  const isProfessor = role === 'PROFESSOR'; // Assuming 'PROFESSOR' role exists
+  const { user, role } = useAuth();
+  const isProfessor = role === 'PROFESSOR' || role === 'ADMIN';
 
-  // --- State ---
-  const [exams, setExams] = useState<Exam[]>(INITIAL_EXAMS);
+  // --- UI Modes & Tabs ---
   const [activeTab, setActiveTab] = useState<'exams' | 'performance'>('exams');
-  const [mode, setMode] = useState<'menu' | 'list' | 'taking' | 'result' | 'edit_exam'>('menu');
+  const [mode, setMode] = useState<'menu' | 'list' | 'taking' | 'result' | 'editor' | 'ranking'>('menu');
   const [selectedLanguage, setSelectedLanguage] = useState<'ENGLISH' | 'SPANISH' | null>(null);
-  const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
 
-  // Exam Execution State
+  // --- Data State ---
+  const [exams, setExams] = useState<LanguageExamType[]>([]);
+  const [selectedExam, setSelectedExam] = useState<LanguageExamType | null>(null);
+  const [examHistory, setExamHistory] = useState<MappedAttempt[]>([]);
+  const [allAttempts, setAllAttempts] = useState<MappedAttempt[]>([]); // For Professor Ranking
+  
+  // --- Simulation Implementation State ---
   const [currentQ, setCurrentQ] = useState(0);
-  const [answers, setAnswers] = useState<number[]>([]);
-  const [examHistory, setExamHistory] = useState<ExamResult[]>(MOCK_HISTORY);
+  const [answers, setAnswers] = useState<string[]>([]); // Store selected option index or short answer text
+  const [finishedResult, setFinishedResult] = useState<{
+    correct: number;
+    total: number;
+    score: number;
+    answers: LanguageExamAnswer[];
+  } | null>(null);
 
-  // Editor State
-  const [editingExam, setEditingExam] = useState<Exam | null>(null);
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
-  const [examToDelete, setExamToDelete] = useState<string | null>(null);
+  // --- Editor State ---
+  const [editingExam, setEditingExam] = useState<LanguageExamType | null>(null);
 
-  // Option Deletion State
-  const [deleteOptionState, setDeleteOptionState] = useState<{ qIndex: number, optIndex: number } | null>(null);
-  const [optionDeleteModalOpen, setOptionDeleteModalOpen] = useState(false);
+  // --- Loader/Modals State ---
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deleteModal, setDeleteModal] = useState<{ open: boolean, id: string | null }>({ open: false, id: null });
 
-  // --- Student Actions ---
+  // --- Initial Data Load ---
+  useEffect(() => {
+    if (user) {
+      fetchExams();
+      if (isProfessor) fetchAllUserAttempts();
+      else fetchMyAttempts();
+    }
+  }, [user, isProfessor]);
 
-  const selectLanguage = (lang: 'ENGLISH' | 'SPANISH') => {
+  const fetchExams = async () => {
+    setIsLoading(true);
+    try {
+      // Joins questions via language_exam_questions
+      const { data: dbExams, error } = await supabase
+        .from('language_exams')
+        .select(`
+          *,
+          questions:language_exam_questions(
+            order,
+            question:language_questions(*)
+          )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      
+      const formatted = (dbExams || []).map((e: any) => ({
+        ...e,
+        questions: e.questions 
+          ? e.questions
+              .sort((a: any, b: any) => a.order - b.order)
+              .map((q: any) => ({ ...q.question, order: q.order }))
+          : []
+      }));
+      setExams(formatted);
+    } catch (err: any) {
+      console.error("fetchExams:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchMyAttempts = async () => {
+    if (!user) return;
+    try {
+      const { data, error } = await supabase
+        .from('language_exam_attempts')
+        .select('*, language_exams(title)')
+        .eq('student_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      
+      const mapped = (data || []).map((item: any) => ({
+        ...item,
+        examTitle: item.language_exams?.title || 'Simulado Excluído',
+        date: new Date(item.created_at).toLocaleDateString('pt-BR')
+      }));
+      setExamHistory(mapped);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchAllUserAttempts = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('language_exam_attempts')
+        .select('*, language_exams(title), profiles(full_name)')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      
+      const mapped = (data || []).map((item: any) => ({
+        ...item,
+        examTitle: item.language_exams?.title || 'Simulado Excluído',
+        date: new Date(item.created_at).toLocaleString('pt-BR')
+      }));
+      setAllAttempts(mapped);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // --- Navigation & Core Logic ---
+
+  const handleSelectLanguage = (lang: 'ENGLISH' | 'SPANISH') => {
     setSelectedLanguage(lang);
     setMode('list');
   };
 
-  const startExam = (exam: Exam) => {
+  const startExam = (exam: LanguageExamType) => {
+    if (!exam.questions || exam.questions.length === 0) {
+      alert("Este simulado ainda não possui questões.");
+      return;
+    }
     setSelectedExam(exam);
-    setAnswers(new Array(exam.questions.length).fill(-1));
+    setAnswers(new Array(exam.questions.length).fill("-1"));
     setCurrentQ(0);
     setMode('taking');
   };
 
-  const handleAnswer = (optionIndex: number) => {
-    const newAnswers = [...answers];
-    newAnswers[currentQ] = optionIndex;
-    setAnswers(newAnswers);
+  const handleFinishExam = async () => {
+    if (!selectedExam || !user) return;
+    
+    // Check if everything is answered (optional requirement, but good practice)
+    const unansweredCount = answers.filter(a => a === "-1").length;
+    if (unansweredCount > 0) {
+        if (!confirm(`Você ainda tem ${unansweredCount} questões sem resposta. Deseja finalizar mesmo assim?`)) return;
+    }
+
+    setIsSaving(true);
+    try {
+      const questions = selectedExam.questions || [];
+      let correctCount = 0;
+      
+      // Calculate score locally for the attempt result
+      const processedAnswers = questions.map((q, i) => {
+          const studentAnswer = answers[i];
+          const isCorrect = studentAnswer === q.correct_answer;
+          if (isCorrect) correctCount++;
+          
+          return {
+              question_id: q.id,
+              answer_text: studentAnswer,
+              is_correct: isCorrect,
+              question: q
+          };
+      });
+
+      // 1. Create Attempt record
+      const { data: attempt, error: attemptErr } = await supabase.from('language_exam_attempts').insert({
+          student_id: user.id,
+          exam_id: selectedExam.id,
+          total_questions: questions.length,
+          score: correctCount,
+          status: 'COMPLETED',
+          finished_at: new Date().toISOString()
+      }).select().single();
+
+      if (attemptErr) throw attemptErr;
+
+      // 2. Create detailed Answer records
+      const answersToInsert = processedAnswers.map(ans => ({
+          attempt_id: attempt.id,
+          question_id: ans.question_id,
+          answer_text: ans.answer_text,
+          is_correct: ans.is_correct
+      }));
+
+      const { error: answersErr } = await supabase.from('language_exam_answers').insert(answersToInsert);
+      if (answersErr) throw answersErr;
+
+      // 3. Set UI State for immediate result view
+      setFinishedResult({
+          correct: correctCount,
+          total: questions.length,
+          score: Math.round((correctCount / questions.length) * 100),
+          answers: processedAnswers as any
+      });
+      
+      setMode('result');
+      fetchMyAttempts();
+    } catch (err: any) {
+      alert("Erro ao salvar simulado: " + err.message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const finishExam = () => {
-    if (!selectedExam) return;
-    const correctCount = selectedExam.questions.reduce((acc, q, i) => acc + (answers[i] === q.correct ? 1 : 0), 0);
-    const result: ExamResult = {
-      examId: selectedExam.id,
-      examTitle: selectedExam.title,
-      date: new Date().toLocaleDateString('pt-BR'),
-      score: correctCount,
-      totalQuestions: selectedExam.questions.length,
-      answers: [...answers]
-    };
-    setExamHistory([result, ...examHistory]);
-    setMode('result');
-  };
+  // --- Professor/Admin Management Logic ---
 
-  const backToMenu = () => {
-    setMode('menu');
-    setSelectedLanguage(null);
-    setSelectedExam(null);
-    setAnswers([]);
-  };
-
-  // --- Professor Actions ---
-
-  const createExam = () => {
-    const newExam: Exam = {
-      id: Date.now().toString(),
-      title: 'Novo Simulado',
-      description: 'Descrição do simulado...',
-      language: selectedLanguage || 'ENGLISH',
-      durationMinutes: 30,
-      status: 'DRAFT',
-      questions: []
+  const handleCreateExam = () => {
+    const newExam: LanguageExamType = {
+        id: crypto.randomUUID(),
+        title: '',
+        description: '',
+        language: selectedLanguage || 'ENGLISH',
+        duration_minutes: 30,
+        status: 'DRAFT',
+        created_at: new Date().toISOString(),
+        questions: []
     };
     setEditingExam(newExam);
-    setMode('edit_exam');
+    setMode('editor');
   };
 
-  const editExam = (exam: Exam) => {
-    setEditingExam({ ...exam }); // Deep copy if needed
-    setMode('edit_exam');
-  };
-
-  const saveExam = () => {
-    if (!editingExam) return;
-
-    const exists = exams.find(e => e.id === editingExam.id);
-    if (exists) {
-      setExams(exams.map(e => e.id === editingExam.id ? editingExam : e));
-    } else {
-      setExams([...exams, editingExam]);
+  const handleSaveExam = async () => {
+    if (!editingExam || !editingExam.title.trim()) {
+        alert("O título do simulado é obrigatório.");
+        return;
     }
-    setMode('list');
-    setEditingExam(null);
-  };
 
-  const requestDeleteExam = (id: string) => {
-    setExamToDelete(id);
-    setDeleteModalOpen(true);
-  };
+    setIsSaving(true);
+    try {
+        const examId = editingExam.id;
+        const examToSave = {
+            id: examId,
+            title: editingExam.title,
+            description: editingExam.description,
+            language: editingExam.language,
+            duration_minutes: editingExam.duration_minutes,
+            status: editingExam.status,
+            created_by: user?.id
+        };
 
-  const confirmDeleteExam = () => {
-    if (examToDelete) {
-      setExams(exams.filter(e => e.id !== examToDelete));
-      setDeleteModalOpen(false);
-      setExamToDelete(null);
+        const { error: upsertErr } = await supabase.from('language_exams').upsert(examToSave);
+        if (upsertErr) throw upsertErr;
+
+        // Sync Questions (Bank Management Logic)
+        // 1. Ensure questions exist in language_questions bank
+        if (editingExam.questions && editingExam.questions.length > 0) {
+            const { error: qErr } = await supabase.from('language_questions').upsert(
+                editingExam.questions.map(q => ({
+                    id: q.id,
+                    language: q.language,
+                    type: q.type,
+                    text: q.text,
+                    options: q.options,
+                    correct_answer: q.correct_answer,
+                    explanation: q.explanation,
+                    difficulty: q.difficulty,
+                    created_by: user?.id
+                }))
+            );
+            if (qErr) throw qErr;
+
+            // 2. Refresh Join Table (Exam -> Questions mapping + order)
+            await supabase.from('language_exam_questions').delete().eq('exam_id', examId);
+            const { error: jErr } = await supabase.from('language_exam_questions').insert(
+                editingExam.questions.map((q, idx) => ({
+                    exam_id: examId,
+                    question_id: q.id,
+                    order: idx
+                }))
+            );
+            if (jErr) throw jErr;
+        }
+
+        alert("Simulado salvo com sucesso!");
+        fetchExams();
+        setMode('list');
+        setEditingExam(null);
+    } catch (err: any) {
+        alert("Erro ao salvar: " + err.message);
+    } finally {
+        setIsSaving(false);
     }
   };
 
-  // Question Management inside Editor
-  const addQuestion = () => {
-    if (!editingExam) return;
-    const newQuestion: Question = {
-      id: Date.now(),
-      text: 'Nova Questão',
-      options: ['Opção A', 'Opção B'],
-      correct: 0,
-      explanation: 'Explicação da resposta correta.'
+  const confirmDeleteExam = async () => {
+    if (!deleteModal.id) return;
+    try {
+        const { error } = await supabase.from('language_exams').delete().eq('id', deleteModal.id);
+        if (error) throw error;
+        fetchExams();
+        setDeleteModal({ open: false, id: null });
+    } catch (err: any) {
+        alert("Erro ao excluir: " + err.message);
+    }
+  };
+
+  // --- RENDER HELPERS (THEMING & COMPONENTS) ---
+
+  const Badge = ({ status }: { status: string }) => {
+    const colors = {
+        DRAFT: 'bg-neutral-100 text-neutral-500 border-neutral-200 dark:bg-stone-800 dark:text-stone-400 dark:border-stone-700',
+        PUBLISHED: 'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/20 dark:text-green-400 dark:border-green-800/30',
+        INACTIVE: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800/30',
+        ENVIADO: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-400 dark:border-indigo-800/30'
     };
-    setEditingExam({
-      ...editingExam,
-      questions: [...editingExam.questions, newQuestion]
-    });
-  };
-
-  const updateQuestion = (qIndex: number, field: keyof Question, value: any) => {
-    if (!editingExam) return;
-    const updatedQuestions = [...editingExam.questions];
-    updatedQuestions[qIndex] = { ...updatedQuestions[qIndex], [field]: value };
-    setEditingExam({ ...editingExam, questions: updatedQuestions });
-  };
-
-  const updateOption = (qIndex: number, optIndex: number, value: string) => {
-    if (!editingExam) return;
-    const updatedQuestions = [...editingExam.questions];
-    const newOptions = [...updatedQuestions[qIndex].options];
-    newOptions[optIndex] = value;
-    updatedQuestions[qIndex] = { ...updatedQuestions[qIndex], options: newOptions };
-    setEditingExam({ ...editingExam, questions: updatedQuestions });
-  };
-
-  const deleteQuestion = (qIndex: number) => {
-    if (!editingExam) return;
-    const updatedQuestions = editingExam.questions.filter((_, i) => i !== qIndex);
-    setEditingExam({ ...editingExam, questions: updatedQuestions });
-  };
-
-  // --- Dynamic Option Management ---
-
-  const addOption = (qIndex: number) => {
-    if (!editingExam) return;
-    const updatedQuestions = [...editingExam.questions];
-    updatedQuestions[qIndex] = {
-      ...updatedQuestions[qIndex],
-      options: [...updatedQuestions[qIndex].options, `Opção ${String.fromCharCode(65 + updatedQuestions[qIndex].options.length)}`]
-    };
-    setEditingExam({ ...editingExam, questions: updatedQuestions });
-  };
-
-  const requestDeleteOption = (qIndex: number, optIndex: number) => {
-    if (!editingExam) return;
-    // Validation: Min 2 options
-    if (editingExam.questions[qIndex].options.length <= 2) {
-      alert("A questão deve ter pelo menos 2 alternativas.");
-      return;
-    }
-    setDeleteOptionState({ qIndex, optIndex });
-    setOptionDeleteModalOpen(true);
-  };
-
-  const confirmDeleteOption = () => {
-    if (!editingExam || !deleteOptionState) return;
-
-    const { qIndex, optIndex } = deleteOptionState;
-    const updatedQuestions = [...editingExam.questions];
-    const question = updatedQuestions[qIndex];
-
-    // Remove option
-    const newOptions = question.options.filter((_, i) => i !== optIndex);
-
-    // Adjust Correct Index
-    let newCorrect = question.correct;
-    if (optIndex === question.correct) {
-      newCorrect = 0; // Reset to 0 if correct option deleted
-    } else if (optIndex < question.correct) {
-      newCorrect = question.correct - 1; // Shift down if earlier option deleted
-    }
-
-    updatedQuestions[qIndex] = {
-      ...question,
-      options: newOptions,
-      correct: newCorrect
-    };
-
-    setEditingExam({ ...editingExam, questions: updatedQuestions });
-    setOptionDeleteModalOpen(false);
-    setDeleteOptionState(null);
-  };
-
-  const updateOptionText = (qIndex: number, optIndex: number, text: string) => {
-    if (!editingExam) return;
-    const updatedQuestions = [...editingExam.questions];
-    const newOptions = [...updatedQuestions[qIndex].options];
-    newOptions[optIndex] = text;
-    updatedQuestions[qIndex] = { ...updatedQuestions[qIndex], options: newOptions };
-    setEditingExam({ ...editingExam, questions: updatedQuestions });
-  };
-
-  // --- Views ---
-
-  const renderPerformance = () => {
-    // ... (Same as before)
-    const average = examHistory.length > 0
-      ? Math.round((examHistory.reduce((acc, r) => acc + (r.score / r.totalQuestions), 0) / examHistory.length) * 100)
-      : 0;
-
+    const labels = { DRAFT: 'Rascunho', PUBLISHED: 'Publicado', INACTIVE: 'Desativado', ENVIADO: 'Enviado' };
+    
     return (
-      <div className="space-y-8 animate-fade-in">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white dark:bg-dark-card p-6 rounded-2xl shadow-level-1 border border-premium-border dark:border-stone-700">
-            <h4 className="text-sm font-bold uppercase text-gray-400 dark:text-gray-500 mb-2">Simulados Realizados</h4>
-            <p className="text-4xl font-serif text-secondary dark:text-primary font-bold">{examHistory.length}</p>
-          </div>
-          <div className="bg-white dark:bg-dark-card p-6 rounded-2xl shadow-level-1 border border-premium-border dark:border-stone-700">
-            <h4 className="text-sm font-bold uppercase text-gray-400 dark:text-gray-500 mb-2">Média de Acertos</h4>
-            <p className="text-4xl font-serif text-secondary dark:text-primary font-bold">{average}%</p>
-          </div>
-          <div className="bg-white dark:bg-dark-card p-6 rounded-2xl shadow-level-1 border border-premium-border dark:border-stone-700">
-            <h4 className="text-sm font-bold uppercase text-gray-400 dark:text-gray-500 mb-2">Última Nota</h4>
-            <p className="text-4xl font-serif text-secondary dark:text-primary font-bold">
-              {examHistory.length > 0 ? `${Math.round((examHistory[0].score / examHistory[0].totalQuestions) * 100)}%` : '-'}
-            </p>
-          </div>
-        </div>
+        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${colors[status as keyof typeof colors] || colors.DRAFT}`}>
+            {labels[status as keyof typeof labels] || status}
+        </span>
+    );
+  };
 
-        <div className="bg-white dark:bg-dark-card rounded-2xl shadow-level-2 border border-premium-border dark:border-stone-700 overflow-hidden">
-          <div className="p-6 border-b border-gray-100 dark:border-stone-700">
-            <h3 className="font-serif text-xl font-bold text-gray-800 dark:text-gray-100">Histórico de Tentativas</h3>
-          </div>
-          <div className="divide-y divide-gray-100 dark:divide-stone-700">
-            {examHistory.length === 0 ? (
-              <div className="p-12 text-center text-gray-400">Nenhum simulado realizado ainda.</div>
-            ) : (
-              examHistory.map((result, idx) => (
-                <div key={idx} className="p-6 hover:bg-surface dark:hover:bg-dark-surface transition-colors flex justify-between items-center">
-                  <div>
-                    <h4 className="font-bold text-gray-800 dark:text-gray-200">{result.examTitle}</h4>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex items-center gap-2">
-                      <Clock size={14} /> {result.date}
-                    </p>
-                  </div>
-                  <div className={`px-4 py-2 rounded-xl font-bold ${(result.score / result.totalQuestions) >= 0.7
-                    ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
-                    : 'bg-yellow-50 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-300'
-                    }`}>
-                    {result.score}/{result.totalQuestions}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+  // --- SUB-VIEWS ---
+
+  const renderLandingMenu = () => (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fade-in">
+      {/* English Card */}
+      <div
+        onClick={() => handleSelectLanguage('ENGLISH')}
+        className="group relative bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-level-2 border border-transparent hover:border-premium-border dark:hover:border-stone-700 transition-all duration-300 cursor-pointer overflow-hidden"
+      >
+        <div className="absolute top-0 right-0 w-32 h-32 bg-secondary/5 rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-500"></div>
+        <div className="w-16 h-16 bg-surface dark:bg-dark-surface rounded-2xl flex items-center justify-center text-secondary dark:text-primary mb-8 group-hover:scale-110 transition-transform shadow-inner">
+          <BookOpen size={32} />
+        </div>
+        <h3 className="font-serif text-3xl text-gray-800 dark:text-gray-100 mb-4 font-bold">Inglês Acadêmico</h3>
+        <p className="text-gray-500 dark:text-gray-400 mb-8 leading-relaxed text-lg italic">Reading, interpretation & instrumental grammar simulations.</p>
+        <div className="flex items-center text-secondary dark:text-primary font-bold text-sm uppercase tracking-widest gap-2">
+          <span>Ver simulados disponíveis</span>
+          <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
         </div>
       </div>
+
+      {/* Spanish Card */}
+      <div
+        onClick={() => handleSelectLanguage('SPANISH')}
+        className="group relative bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-level-2 border border-transparent hover:border-premium-border dark:hover:border-stone-700 transition-all duration-300 cursor-pointer overflow-hidden"
+      >
+        <div className="absolute top-0 right-0 w-32 h-32 bg-secondary/5 rounded-full -mr-16 -mt-16 group-hover:scale-150 transition-transform duration-500"></div>
+        <div className="w-16 h-16 bg-surface dark:bg-dark-surface rounded-2xl flex items-center justify-center text-secondary dark:text-primary mb-8 group-hover:scale-110 transition-transform shadow-inner">
+          <Award size={32} />
+        </div>
+        <h3 className="font-serif text-3xl text-gray-800 dark:text-gray-100 mb-4 font-bold">Espanhol Acadêmico</h3>
+        <p className="text-gray-500 dark:text-gray-400 mb-8 leading-relaxed text-lg italic">Simulacros de lectura, interpretación y gramática instrumental.</p>
+        <div className="flex items-center text-secondary dark:text-primary font-bold text-sm uppercase tracking-widest gap-2">
+          <span>Ver simulados disponíveis</span>
+          <ChevronRight size={20} className="group-hover:translate-x-1 transition-transform" />
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderExamList = () => {
+    const list = exams.filter(e => e.language === selectedLanguage && (isProfessor || e.status === 'PUBLISHED'));
+    
+    return (
+        <div className="space-y-6 animate-fade-in">
+            <div className="flex justify-between items-center mb-4">
+                <button onClick={() => setMode('menu')} className="text-gray-400 hover:text-secondary flex items-center gap-2 text-sm font-bold uppercase tracking-widest transition-colors">
+                    <ArrowLeft size={18} /> Voltar aos Idiomas
+                </button>
+                {isProfessor && (
+                    <button onClick={handleCreateExam} className="bg-secondary dark:bg-primary text-white dark:text-stone-900 px-6 py-3 rounded-2xl font-bold shadow-lg flex items-center gap-2 hover:scale-105 transition-transform active:scale-95">
+                        <Plus size={20} /> Criar Simulado
+                    </button>
+                )}
+            </div>
+
+            {list.length === 0 ? (
+                <div className="text-center py-20 bg-white dark:bg-dark-card rounded-[2rem] border-2 border-dashed border-premium-border dark:border-stone-800">
+                    <BookOpen size={48} className="mx-auto text-gray-200 mb-4" />
+                    <p className="text-gray-400 font-serif italic text-lg">Nenhum simulado {isProfessor ? 'cadastrado' : 'publicado'} para este idioma ainda.</p>
+                </div>
+            ) : (
+                <div className="grid gap-6">
+                    {list.map(exam => (
+                        <div key={exam.id} className="bg-white dark:bg-dark-card p-8 rounded-3xl shadow-level-1 hover:shadow-level-2 border border-premium-border dark:border-stone-800 transition-all flex flex-col md:flex-row justify-between items-center gap-6 group">
+                            <div className="flex-1">
+                                <div className="flex items-center gap-4 mb-2">
+                                    <h3 className="font-serif text-2xl font-bold text-gray-800 dark:text-gray-100">{exam.title}</h3>
+                                    {isProfessor && <Badge status={exam.status} />}
+                                </div>
+                                <p className="text-gray-500 dark:text-gray-400 mb-5 italic max-w-2xl">{exam.description || 'Simulado preparatório para proficiência.'}</p>
+                                <div className="flex gap-6 text-[11px] font-bold uppercase tracking-widest text-gray-400">
+                                    <span className="flex items-center gap-1.5"><ListIcon size={14} /> {exam.questions?.length || 0} QUESTÕES</span>
+                                    <span className="flex items-center gap-1.5"><ClockIcon size={14} /> {exam.duration_minutes} MINUTOS</span>
+                                </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-3">
+                                {isProfessor ? (
+                                    <>
+                                        <button 
+                                            onClick={() => {
+                                                setSelectedExam(exam);
+                                                setMode('ranking');
+                                            }} 
+                                            className="p-3 text-secondary dark:text-primary hover:bg-surface dark:hover:bg-stone-800 rounded-xl transition-colors shadow-sm"
+                                            title="Ver Ranking de Resultados"
+                                        >
+                                            <BarChart2 size={22} />
+                                        </button>
+                                        <button 
+                                            onClick={() => {
+                                                setEditingExam(JSON.parse(JSON.stringify(exam)));
+                                                setMode('editor');
+                                            }} 
+                                            className="p-3 text-secondary dark:text-primary hover:bg-surface dark:hover:bg-stone-800 rounded-xl transition-colors shadow-sm"
+                                            title="Editar"
+                                        >
+                                            <Edit2 size={22} />
+                                        </button>
+                                        <button 
+                                            onClick={() => setDeleteModal({ open: true, id: exam.id })} 
+                                            className="p-3 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors"
+                                            title="Excluir"
+                                        >
+                                            <Trash2 size={22} />
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        onClick={() => startExam(exam)}
+                                        className="bg-secondary dark:bg-primary text-white dark:text-stone-900 px-8 py-3.5 rounded-2xl font-bold shadow-lg hover:shadow-xl hover:-translate-y-1 transition-all active:translate-y-0"
+                                    >
+                                        Iniciar Simulado
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+  };
+
+  const renderExamPlayer = () => {
+    if (!selectedExam || !selectedExam.questions) return null;
+    const q = selectedExam.questions[currentQ];
+    
+    return (
+        <div className="max-w-4xl mx-auto animate-fade-in pb-12">
+            <div className="bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-level-3 border border-premium-border dark:border-stone-700 relative overflow-hidden">
+                <div className="absolute top-0 left-0 h-1.5 bg-secondary/20 dark:bg-stone-800 w-full">
+                    <div 
+                        className="h-full bg-secondary dark:bg-primary transition-all duration-500 ease-out" 
+                        style={{ width: `${((currentQ + 1) / selectedExam.questions.length) * 100}%` }}
+                    ></div>
+                </div>
+
+                <div className="flex justify-between items-center mb-10 pt-4">
+                    <span className="text-gray-400 text-xs font-bold uppercase tracking-[0.2em]">Questão {currentQ + 1} de {selectedExam.questions.length}</span>
+                    <button onClick={() => {if(confirm("Deseja interromper o simulado? Seu progresso não será salvo.")) setMode('list')}} className="text-gray-300 hover:text-red-500 transition-colors"><XIcon size={24} /></button>
+                </div>
+
+                <div className="mb-10">
+                    <h2 className="text-2xl font-serif font-medium text-gray-800 dark:text-gray-100 leading-relaxed mb-8">{q.text}</h2>
+                    
+                    <div className="space-y-4">
+                        {q.options?.map((opt, idx) => (
+                            <button
+                                key={idx}
+                                onClick={() => {
+                                    const newAns = [...answers];
+                                    newAns[currentQ] = String(idx);
+                                    setAnswers(newAns);
+                                }}
+                                className={`w-full text-left p-6 rounded-2xl border-2 transition-all duration-300 flex items-center group ${
+                                    answers[currentQ] === String(idx)
+                                    ? 'bg-secondary/5 border-secondary dark:border-primary text-secondary dark:text-primary'
+                                    : 'border-transparent bg-surface dark:bg-dark-surface hover:bg-gray-100 dark:hover:bg-stone-800 text-gray-600 dark:text-gray-300'
+                                } shadow-sm`}
+                            >
+                                <span className={`w-10 h-10 rounded-xl flex items-center justify-center mr-5 text-sm font-bold border-2 transition-all ${
+                                    answers[currentQ] === String(idx) 
+                                    ? 'bg-secondary dark:bg-primary text-white dark:text-stone-900 border-secondary dark:border-primary' 
+                                    : 'bg-white dark:bg-dark-card border-gray-100 dark:border-stone-700 text-gray-400 group-hover:border-secondary shadow-inner'
+                                }`}>
+                                    {String.fromCharCode(65 + idx)}
+                                </span>
+                                <span className="font-medium text-lg flex-1">{opt}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex justify-between items-center pt-8 border-t border-gray-50 dark:border-stone-800/50">
+                    <button
+                        disabled={currentQ === 0}
+                        onClick={() => setCurrentQ(curr => curr - 1)}
+                        className="flex items-center gap-2 px-6 py-3 text-gray-400 font-bold text-xs uppercase tracking-widest hover:text-secondary disabled:opacity-0 transition-all"
+                    >
+                        <ArrowLeft size={16} /> Anterior
+                    </button>
+
+                    {currentQ < selectedExam.questions.length - 1 ? (
+                        <button
+                            onClick={() => setCurrentQ(curr => curr + 1)}
+                            className="bg-secondary dark:bg-primary text-white dark:text-stone-900 px-10 py-4 rounded-2xl font-bold shadow-lg hover:shadow-xl active:scale-95 transition-all"
+                        >
+                            Próxima Questão
+                        </button>
+                    ) : (
+                        <button
+                            onClick={handleFinishExam}
+                            disabled={isSaving}
+                            className="bg-green-600 hover:bg-green-700 text-white px-10 py-4 rounded-2xl font-bold shadow-lg hover:shadow-xl active:scale-95 transition-all min-w-[180px] flex justify-center items-center"
+                        >
+                            {isSaving ? <Loader size={20} className="animate-spin" /> : 'Finalizar & Enviar'}
+                        </button>
+                    )}
+                </div>
+            </div>
+            
+            {/* Warning: Pedagogical feedback is hidden until finish */}
+            <div className="mt-8 bg-amber-50 dark:bg-amber-900/10 p-6 rounded-2xl border border-amber-100 dark:border-amber-800/30 flex items-center gap-4 text-amber-700 dark:text-amber-400">
+                <AlertCircle size={24} className="shrink-0" />
+                <p className="text-sm italic font-serif">O gabarito e as resoluções pedagógicas estarão disponíveis imediatamente após você finalizar sua tentativa.</p>
+            </div>
+        </div>
+    );
+  };
+
+  const renderResult = () => {
+    if (!finishedResult || !selectedExam) return null;
+
+    return (
+        <div className="max-w-4xl mx-auto animate-fade-in pb-12">
+            {/* Result Header */}
+            <div className="bg-white dark:bg-dark-card p-12 rounded-[2.5rem] shadow-level-3 border border-premium-border dark:border-stone-700 text-center mb-10 overflow-hidden relative">
+                <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-secondary to-[#8a7a6c]"></div>
+                <Award size={64} className="mx-auto text-secondary mb-6 animate-bounce" />
+                <h2 className="text-4xl font-serif text-secondary dark:text-primary font-bold mb-4">Simulado Finalizado!</h2>
+                <div className="flex justify-center gap-12 mt-8 mb-10">
+                    <div className="text-center">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Acertos</p>
+                        <p className="text-4xl font-serif font-bold text-gray-800 dark:text-gray-100">{finishedResult.correct} / {finishedResult.total}</p>
+                    </div>
+                    <div className="text-center border-l border-gray-100 dark:border-stone-800 pl-12">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Nota Final</p>
+                        <p className="text-4xl font-serif font-bold text-secondary dark:text-primary">{finishedResult.score}%</p>
+                    </div>
+                </div>
+                <button onClick={() => { setMode('menu'); setFinishedResult(null); }} className="px-10 py-4 bg-secondary dark:bg-primary text-white dark:text-stone-900 rounded-2xl font-bold shadow-lg hover:shadow-xl transition-all">Voltar ao Menu</button>
+            </div>
+
+            {/* Resolution Cards (Question by Question Details) */}
+            <h3 className="font-serif text-2xl font-bold text-gray-800 dark:text-gray-100 mb-8 flex items-center gap-3">
+                <History className="text-secondary" /> Revisão do Simulado
+            </h3>
+            <div className="space-y-8">
+                {finishedResult.answers.map((ans: any, idx) => {
+                    const q = ans.question;
+                    const isCorrect = ans.is_correct;
+                    
+                    return (
+                        <div key={idx} className={`bg-white dark:bg-dark-card p-10 rounded-3xl shadow-sm border-l-8 ${isCorrect ? 'border-l-green-500' : 'border-l-red-500'} border-premium-border dark:border-stone-700`}>
+                            <div className="flex justify-between items-start mb-6">
+                                <span className={`px-4 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${isCorrect ? 'bg-green-50 text-green-700 dark:bg-green-900/20' : 'bg-red-50 text-red-700 dark:bg-red-900/20'}`}>
+                                    {isCorrect ? 'Você acertou' : 'Você errou'}
+                                </span>
+                                <span className="text-gray-300 font-bold text-xs uppercase tracking-widest">Questão {idx+1}</span>
+                            </div>
+
+                            <p className="text-xl font-serif font-medium text-gray-800 dark:text-gray-100 mb-8 leading-relaxed">{q.text}</p>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                                <div className={`p-5 rounded-2xl border-2 ${isCorrect ? 'bg-green-50/50 border-green-100 dark:bg-green-900/10' : 'bg-red-50/50 border-red-100 dark:bg-red-900/10'}`}>
+                                    <p className="text-[9px] font-bold text-gray-400 uppercase mb-2 tracking-widest">Sua Escolha</p>
+                                    <p className="font-bold text-gray-800 dark:text-gray-100">{q.options[parseInt(ans.answer_text)] || 'Não respondida'}</p>
+                                </div>
+                                {!isCorrect && (
+                                    <div className="p-5 rounded-2xl bg-green-50/50 border-2 border-green-100 dark:bg-green-900/10">
+                                        <p className="text-[9px] font-bold text-green-600 dark:text-green-400 uppercase mb-2 tracking-widest">Gabarito Correto</p>
+                                        <p className="font-bold text-green-700 dark:text-green-300">{q.options[parseInt(q.correct_answer || '0')]}</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {q.explanation && (
+                                <div className="bg-surface dark:bg-stone-800/50 p-6 rounded-2xl border border-premium-border dark:border-stone-700">
+                                    <p className="text-[10px] font-bold text-secondary dark:text-primary uppercase mb-3 flex items-center gap-2 tracking-[0.2em]">
+                                        <CheckIcon size={14} /> Resolução Pedagógica
+                                    </p>
+                                    <div className="text-gray-600 dark:text-gray-400 italic text-sm leading-relaxed whitespace-pre-wrap">{q.explanation}</div>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+  };
+
+  const renderRanking = () => {
+    if (!selectedExam) return null;
+    const ranking = allAttempts.filter(att => att.exam_id === selectedExam.id);
+
+    return (
+        <div className="space-y-6 animate-fade-in">
+            <header className="flex justify-between items-center mb-8">
+                <button onClick={() => setMode('list')} className="text-gray-400 hover:text-secondary flex items-center gap-2 text-sm font-bold uppercase tracking-widest">
+                    <ArrowLeft size={18} /> Voltar à Lista
+                </button>
+                <div className="text-right">
+                    <h2 className="text-2xl font-serif font-bold text-gray-800 dark:text-gray-100">{selectedExam.title}</h2>
+                    <p className="text-xs text-gray-400 uppercase tracking-widest">Ranking Global de Desempenho</p>
+                </div>
+            </header>
+
+            <div className="bg-white dark:bg-dark-card rounded-[2rem] shadow-level-2 border border-premium-border dark:border-stone-800 overflow-hidden">
+                <table className="w-full text-left">
+                    <thead>
+                        <tr className="bg-surface dark:bg-dark-surface border-b border-gray-100 dark:border-stone-800">
+                            <th className="px-8 py-5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Posição</th>
+                            <th className="px-8 py-5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Estudante</th>
+                            <th className="px-8 py-5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Nota</th>
+                            <th className="px-8 py-5 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Finalizado em</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 dark:divide-stone-800">
+                        {ranking.sort((a,b) => b.score - a.score).map((att, idx) => (
+                            <tr key={att.id} className="hover:bg-surface/50 dark:hover:bg-stone-800/30 transition-colors group">
+                                <td className="px-8 py-6">
+                                    <span className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${idx === 0 ? 'bg-yellow-100 text-yellow-700' : idx === 1 ? 'bg-stone-200 text-stone-600' : idx === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-400'}`}>
+                                        {idx + 1}º
+                                    </span>
+                                </td>
+                                <td className="px-8 py-6">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 bg-surface dark:bg-stone-800 rounded-lg flex items-center justify-center text-gray-400 dark:text-stone-600"><Users size={16} /></div>
+                                        <span className="font-bold text-gray-800 dark:text-gray-200">{(att as any).profiles?.full_name || 'Estudante Anônimo'}</span>
+                                    </div>
+                                </td>
+                                <td className="px-8 py-6">
+                                    <div className="flex flex-col">
+                                        <span className="text-xl font-serif font-bold text-secondary dark:text-primary">{Math.round((att.score / att.total_questions) * 100)}%</span>
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter">{att.score} de {att.total_questions} corretas</span>
+                                    </div>
+                                </td>
+                                <td className="px-8 py-6 text-sm text-gray-500 font-medium">{att.date}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                {ranking.length === 0 && (
+                    <div className="p-20 text-center text-gray-300 font-serif italic italic text-lg">Nenhuma tentativa concluída ainda para este simulado.</div>
+                )}
+            </div>
+        </div>
     );
   };
 
@@ -369,428 +680,336 @@ const LanguageExam: React.FC = () => {
     if (!editingExam) return null;
 
     return (
-      <div className="bg-white dark:bg-dark-card rounded-3xl shadow-level-3 animate-fade-in border border-premium-border dark:border-stone-700 overflow-hidden">
-        {/* Header Config */}
-        <div className="p-8 border-b border-gray-100 dark:border-stone-700 bg-surface/30 dark:bg-stone-800/30">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-serif font-bold text-secondary dark:text-primary">Editor de Simulado</h2>
-            <div className="flex gap-3">
-              <button onClick={() => setMode('list')} className="px-4 py-2 text-gray-500 font-bold hover:bg-gray-100 dark:hover:bg-stone-800 rounded-lg">Cancelar</button>
-              <button onClick={saveExam} className="px-6 py-2 bg-secondary dark:bg-primary text-white dark:text-stone-900 font-bold rounded-lg shadow-lg flex items-center gap-2">
-                <Save size={18} /> Salvar Simulado
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-xs font-bold uppercase text-gray-400 mb-2">Título do Simulado</label>
-              <input
-                type="text"
-                value={editingExam.title}
-                onChange={e => setEditingExam({ ...editingExam, title: e.target.value })}
-                className="w-full bg-white dark:bg-dark-surface border border-gray-200 dark:border-stone-600 rounded-xl p-3 font-bold text-gray-800 dark:text-gray-100 outline-none focus:border-secondary"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold uppercase text-gray-400 mb-2">Status</label>
-              <select
-                value={editingExam.status}
-                onChange={e => setEditingExam({ ...editingExam, status: e.target.value as any })}
-                className="w-full bg-white dark:bg-dark-surface border border-gray-200 dark:border-stone-600 rounded-xl p-3 font-bold text-gray-800 dark:text-gray-100 outline-none focus:border-secondary"
-              >
-                <option value="DRAFT">Rascunho (Oculto)</option>
-                <option value="PUBLISHED">Publicado (Visível)</option>
-                <option value="INACTIVE">Inativo (Arquivado)</option>
-              </select>
-            </div>
-            <div className="md:col-span-2">
-              <label className="block text-xs font-bold uppercase text-gray-400 mb-2">Descrição</label>
-              <textarea
-                value={editingExam.description}
-                onChange={e => setEditingExam({ ...editingExam, description: e.target.value })}
-                className="w-full bg-white dark:bg-dark-surface border border-gray-200 dark:border-stone-600 rounded-xl p-3 text-gray-600 dark:text-gray-300 outline-none focus:border-secondary h-20 resize-none"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Question Manager */}
-        <div className="p-8 bg-surface dark:bg-dark-surface/50 min-h-[500px]">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="font-bold text-gray-700 dark:text-gray-200 uppercase tracking-wider text-sm flex items-center gap-2">
-              <BookOpen size={16} /> Questões ({editingExam.questions.length})
-            </h3>
-            <button onClick={addQuestion} className="text-secondary dark:text-primary font-bold text-sm bg-white dark:bg-stone-800 px-4 py-2 rounded-lg border border-premium-border hover:shadow-md transition-all flex items-center gap-2">
-              <Plus size={16} /> Adicionar Questão
-            </button>
-          </div>
-
-          <div className="space-y-6">
-            {editingExam.questions.map((q, qIndex) => (
-              <div key={q.id} className="bg-white dark:bg-dark-card p-6 rounded-xl border border-gray-100 dark:border-stone-700 shadow-sm group">
-                <div className="flex justify-between items-start mb-4">
-                  <span className="text-xs font-bold bg-gray-100 dark:bg-stone-800 text-gray-500 px-2 py-1 rounded">Q{qIndex + 1}</span>
-                  <button onClick={() => deleteQuestion(qIndex)} className="text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={16} /></button>
-                </div>
-
-                <textarea
-                  value={q.text}
-                  onChange={e => updateQuestion(qIndex, 'text', e.target.value)}
-                  placeholder="Enunciado da questão..."
-                  className="w-full font-serif font-medium text-lg bg-transparent border-none outline-none resize-none mb-4 placeholder-gray-300"
-                  rows={2}
-                />
-
-                <div className="space-y-3 pl-4 border-l-2 border-gray-100 dark:border-stone-700 mb-4">
-                  {q.options.map((opt, optIndex) => (
-                    <div key={optIndex} className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        checked={q.correct === optIndex}
-                        onChange={() => updateQuestion(qIndex, 'correct', optIndex)}
-                        className="accent-secondary w-4 h-4 cursor-pointer"
-                      />
-                      <span className="text-xs font-bold text-gray-400 w-4">{String.fromCharCode(65 + optIndex)}</span>
-                      <input
-                        type="text"
-                        value={opt}
-                        onChange={e => updateOptionText(qIndex, optIndex, e.target.value)}
-                        className="flex-1 bg-transparent border-b border-gray-200 dark:border-stone-700 text-sm py-1 outline-none focus:border-secondary"
-                      />
-                      <button
-                        onClick={() => requestDeleteOption(qIndex, optIndex)}
-                        className="text-gray-300 hover:text-red-400 p-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Excluir alternativa"
-                      >
-                        <XCircle size={14} />
-                      </button>
+        <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-20">
+            <header className="flex justify-between items-center bg-white dark:bg-dark-card p-8 rounded-[2rem] shadow-level-1 border border-premium-border dark:border-stone-800">
+                <div className="flex items-center gap-4">
+                    <button onClick={() => { if(confirm("Deseja cancelar a edição? Todas as alterações não salvas serão perdidas.")) setMode('list'); }} className="text-gray-400 hover:text-red-500 transition-colors"><XIcon size={24}/></button>
+                    <div>
+                        <h2 className="text-2xl font-serif font-bold text-secondary dark:text-primary">Configurar Simulado</h2>
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Painel Administrativo Laramentoria</p>
                     </div>
-                  ))}
-                  <button
-                    onClick={() => addOption(qIndex)}
-                    className="text-xs font-bold text-secondary dark:text-primary flex items-center gap-1 hover:underline"
-                  >
-                    <Plus size={12} /> Adicionar Alternativa
-                  </button>
+                </div>
+                <button onClick={handleSaveExam} disabled={isSaving} className="bg-secondary dark:bg-primary text-white dark:text-stone-900 px-10 py-4 rounded-2xl font-bold shadow-lg flex items-center gap-2 hover:scale-105 active:scale-95 transition-all">
+                    {isSaving ? <Loader size={20} className="animate-spin" /> : <Save size={20} />}
+                    Salvar Simulado
+                </button>
+            </header>
+
+            {/* General Info */}
+            <div className="bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-sm border border-premium-border dark:border-stone-800 grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="md:col-span-2">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Título do Simulado</label>
+                    <input 
+                        type="text" 
+                        value={editingExam.title} 
+                        onChange={(e) => setEditingExam({...editingExam, title: e.target.value})}
+                        className="w-full bg-surface dark:bg-stone-900 border-none rounded-2xl p-4 font-serif text-lg outline-none focus:ring-2 ring-secondary/20 transition-all font-bold text-gray-800 dark:text-gray-100"
+                        placeholder="Ex: Simulado Acadêmico Inglês - Outubro 2026"
+                    />
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Status do Módulo</label>
+                    <select 
+                        value={editingExam.status}
+                        onChange={(e) => setEditingExam({...editingExam, status: e.target.value as any})}
+                        className="w-full bg-surface dark:bg-stone-900 border-none rounded-2xl p-4 font-bold text-sm outline-none focus:ring-2 ring-secondary/20 transition-all text-gray-800 dark:text-gray-100 cursor-pointer appearance-none"
+                    >
+                        <option value="DRAFT">Rascunho (Oculto)</option>
+                        <option value="PUBLISHED">Publicado (Visível para Alunos)</option>
+                        <option value="INACTIVE">Inativo / Arquivado</option>
+                    </select>
+                </div>
+                <div className="md:col-span-3">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Descrição / Instruções</label>
+                    <textarea 
+                        value={editingExam.description || ''} 
+                        onChange={(e) => setEditingExam({...editingExam, description: e.target.value})}
+                        className="w-full bg-surface dark:bg-stone-900 border-none rounded-2xl p-4 italic text-sm outline-none focus:ring-2 ring-secondary/20 transition-all min-h-[100px] resize-none text-gray-600 dark:text-gray-400"
+                        placeholder="Instruções para o aluno ao iniciar este simulado..."
+                    />
+                </div>
+            </div>
+
+            {/* Questions Management */}
+            <div className="space-y-6">
+                <div className="flex justify-between items-center bg-surface/50 dark:bg-stone-900/50 p-6 rounded-3xl border border-dashed border-premium-border dark:border-stone-800">
+                    <h3 className="font-serif text-2xl font-bold flex items-center gap-3">
+                        <ListIcon size={24} className="text-secondary" /> Questões ({editingExam.questions?.length})
+                    </h3>
+                    <button 
+                        onClick={() => {
+                            const newQ: LanguageQuestion = {
+                                id: crypto.randomUUID(),
+                                language: editingExam.language,
+                                type: 'MULTIPLE_CHOICE',
+                                text: '',
+                                options: ['', '', '', ''],
+                                correct_answer: '0',
+                                explanation: '',
+                                difficulty: 'MEDIUM',
+                                category: null,
+                                created_at: new Date().toISOString()
+                            };
+                            setEditingExam({...editingExam, questions: [...(editingExam.questions || []), newQ]});
+                        }}
+                        className="px-6 py-3 bg-white dark:bg-dark-card border border-premium-border dark:border-stone-700 rounded-xl font-bold text-sm text-secondary dark:text-primary flex items-center gap-2 shadow-sm hover:shadow-md transition-all"
+                    >
+                        <Plus size={18} /> Adicionar Nova Questão
+                    </button>
                 </div>
 
-                <div className="mt-4 pt-4 border-t border-gray-50 dark:border-stone-800">
-                  <label className="text-xs font-bold uppercase text-secondary dark:text-primary mb-1 block flex items-center gap-1">
-                    <AlertCircle size={12} /> Explicação Pedagógica
-                  </label>
-                  <textarea
-                    value={q.explanation}
-                    onChange={e => updateQuestion(qIndex, 'explanation', e.target.value)}
-                    placeholder="Explique porque a resposta correta é a correta..."
-                    className="w-full text-sm bg-surface dark:bg-stone-800 p-3 rounded-lg text-gray-600 dark:text-gray-300 outline-none resize-none italic"
-                    rows={2}
-                  />
+                <div className="space-y-8">
+                    {editingExam.questions?.map((q, qIdx) => (
+                        <div key={q.id} className="bg-white dark:bg-dark-card p-10 rounded-[2.5rem] shadow-sm border border-premium-border dark:border-stone-800 relative group animate-fade-in">
+                            <div className="absolute -top-4 -left-4 w-10 h-10 bg-secondary dark:bg-primary text-white dark:text-stone-900 rounded-full flex items-center justify-center font-bold shadow-lg">#{qIdx+1}</div>
+                            <button onClick={() => {
+                                const qs = [...(editingExam.questions || [])];
+                                qs.splice(qIdx, 1);
+                                setEditingExam({...editingExam, questions: qs});
+                            }} className="absolute top-6 right-8 text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"><Trash2 size={24}/></button>
+
+                            <div className="mb-10">
+                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-3">Enunciado da Questão</label>
+                                <textarea 
+                                    value={q.text} 
+                                    onChange={(e) => {
+                                        const qs = [...(editingExam.questions || [])];
+                                        qs[qIdx] = {...qs[qIdx], text: e.target.value};
+                                        setEditingExam({...editingExam, questions: qs});
+                                    }}
+                                    className="w-full bg-surface dark:bg-stone-900 border-none rounded-2xl p-5 font-serif text-xl outline-none focus:ring-2 ring-secondary/20 transition-all font-medium min-h-[120px] resize-none text-gray-800 dark:text-gray-100"
+                                    placeholder="Escreva aqui o texto da questão..."
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                                <div>
+                                    <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-4">Alternativas & Gabarito</label>
+                                    <div className="space-y-4">
+                                        {q.options?.map((opt, optIdx) => (
+                                            <div key={optIdx} className="flex items-center gap-3">
+                                                <input 
+                                                    type="radio" 
+                                                    name={`correct-${q.id}`} 
+                                                    checked={q.correct_answer === String(optIdx)}
+                                                    onChange={() => {
+                                                        const qs = [...(editingExam.questions || [])];
+                                                        qs[qIdx] = {...qs[qIdx], correct_answer: String(optIdx)};
+                                                        setEditingExam({...editingExam, questions: qs});
+                                                    }}
+                                                    className="w-5 h-5 accent-secondary cursor-pointer"
+                                                />
+                                                <input 
+                                                    type="text" 
+                                                    value={opt}
+                                                    onChange={(e) => {
+                                                        const qs = [...(editingExam.questions || [])];
+                                                        const opts = [...(qs[qIdx].options || [])];
+                                                        opts[optIdx] = e.target.value;
+                                                        qs[qIdx] = {...qs[qIdx], options: opts};
+                                                        setEditingExam({...editingExam, questions: qs});
+                                                    }}
+                                                    className="flex-1 bg-surface dark:bg-stone-900 border-none rounded-xl p-3 text-sm outline-none font-medium focus:ring-2 ring-secondary/10 text-gray-700 dark:text-gray-300"
+                                                    placeholder={`Alternativa ${String.fromCharCode(65+optIdx)}`}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-bold text-secondary dark:text-primary uppercase tracking-widest block mb-4">Explicação Pedagógica (Resolução)</label>
+                                    <textarea 
+                                        value={q.explanation || ''} 
+                                        onChange={(e) => {
+                                            const qs = [...(editingExam.questions || [])];
+                                            qs[qIdx] = {...qs[qIdx], explanation: e.target.value};
+                                            setEditingExam({...editingExam, questions: qs});
+                                        }}
+                                        className="w-full bg-surface dark:bg-stone-900 border-2 border-secondary/10 rounded-2xl p-5 italic text-sm outline-none focus:ring-2 ring-secondary/20 transition-all min-h-[160px] resize-none text-gray-600 dark:text-gray-400 leading-relaxed"
+                                        placeholder="Esta explicação aparecerá ao aluno somente depois que ele finalizar o simulado..."
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    ))}
                 </div>
-              </div>
-            ))}
-          </div>
+            </div>
         </div>
-      </div>
     );
   };
 
-  // --- Main Render ---
+  const renderPerformance = () => {
+    const list = isProfessor ? [] : examHistory; // For simplicity in student view
+    const totalSimulados = isProfessor ? exams.length : list.length;
+    const avgScore = list.length > 0 ? Math.round(list.reduce((acc, curr) => acc + (curr.score / curr.total_questions), 0) / list.length * 100) : 0;
+    const latestAttempt = list.length > 0 ? list[0] : null;
+
+    return (
+        <div className="space-y-10 animate-fade-in pb-12">
+            {/* Metrics Dashboard */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <MetricCard icon={<BookOpen />} label="Simulados Realizados" value={totalSimulados} />
+                <MetricCard icon={<TrendingUp />} label="Média de Acertos" value={`${avgScore}%`} />
+                <MetricCard icon={<Award />} label="Última Nota" value={latestAttempt ? `${Math.round((latestAttempt.score / latestAttempt.total_questions)*100)}%` : '-'} />
+            </div>
+
+            {/* History Table */}
+            <div className="bg-white dark:bg-dark-card rounded-[2.5rem] shadow-level-2 border border-premium-border dark:border-stone-800 overflow-hidden">
+                <div className="p-10 border-b border-gray-50 dark:border-stone-800 flex justify-between items-center">
+                    <h3 className="font-serif text-2xl font-bold flex items-center gap-3"><History className="text-secondary" /> Histórico de Simulados</h3>
+                    <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Apenas Tentativas Finalizadas</div>
+                </div>
+                {list.length === 0 ? (
+                    <div className="p-20 text-center font-serif text-gray-300 italic text-lg">Você ainda não concluiu nenhum simulado.</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                            <thead>
+                                <tr className="bg-surface/50 dark:bg-stone-900/10 text-[10px] uppercase font-bold text-gray-400 tracking-[0.2em] border-b border-gray-50 dark:border-stone-800">
+                                    <th className="px-10 py-5">Simulado</th>
+                                    <th className="px-10 py-5">Data</th>
+                                    <th className="px-10 py-5">Desempenho</th>
+                                    <th className="px-10 py-5">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50 dark:divide-stone-800">
+                                {list.map(att => (
+                                    <tr key={att.id} className="group hover:bg-surface/30 dark:hover:bg-stone-900/20 transition-colors">
+                                        <td className="px-10 py-6 font-bold text-gray-700 dark:text-gray-200">{att.examTitle}</td>
+                                        <td className="px-10 py-6 text-sm text-gray-500 font-medium italic">{att.date}</td>
+                                        <td className="px-10 py-6">
+                                            <div className="flex flex-col">
+                                                <span className={`text-xl font-serif font-bold ${ (att.score / att.total_questions) >= 0.7 ? 'text-green-600' : 'text-amber-600' }`}>
+                                                    {Math.round((att.score / att.total_questions) * 100)}%
+                                                </span>
+                                                <span className="text-[9px] uppercase tracking-tighter text-gray-400 font-bold">{att.score} acertos de {att.total_questions}</span>
+                                            </div>
+                                        </td>
+                                        <td className="px-10 py-6 text-right">
+                                            <button 
+                                                onClick={async () => {
+                                                    // Fetch details and show result mode
+                                                    setIsLoading(true);
+                                                    try {
+                                                        const { data, error } = await supabase.from('language_exam_answers')
+                                                            .select('*, question:language_questions(*)')
+                                                            .eq('attempt_id', att.id);
+                                                        if(error) throw error;
+                                                        
+                                                        const exam = exams.find(e => e.id === att.exam_id);
+                                                        setSelectedExam(exam || null);
+                                                        setFinishedResult({
+                                                            correct: att.score,
+                                                            total: att.total_questions,
+                                                            score: Math.round((att.score / att.total_questions) * 100),
+                                                            answers: data as any
+                                                        });
+                                                        setMode('result');
+                                                    } finally { setIsLoading(false); }
+                                                }}
+                                                className="text-secondary dark:text-primary font-bold text-[10px] uppercase tracking-widest flex items-center gap-2 hover:underline"
+                                            >
+                                                Ver Resolução <ChevronRight size={14} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+  };
+
+  const MetricCard = ({ icon, label, value }: { icon: any, label: string, value: any }) => (
+    <div className="bg-white dark:bg-dark-card p-10 rounded-[2rem] shadow-sm border border-premium-border dark:border-stone-800 transition-all hover:-translate-y-1">
+        <div className="w-12 h-12 bg-surface dark:bg-stone-800 rounded-xl flex items-center justify-center text-secondary dark:text-primary mb-6 shadow-inner">{icon}</div>
+        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mb-2">{label}</p>
+        <p className="text-4xl font-serif font-bold text-gray-800 dark:text-gray-100">{value}</p>
+    </div>
+  );
+
+
+  // --- MAIN RENDER ---
+
+  const renderContent = () => {
+      if (isLoading) return (
+        <div className="flex flex-col items-center justify-center p-40">
+            <Loader className="animate-spin text-secondary mb-4" size={48} />
+            <p className="text-gray-400 font-serif italic text-lg animate-pulse">Carregando conteúdos acadêmicos...</p>
+        </div>
+      );
+
+      switch (mode) {
+          case 'menu': return renderLandingMenu();
+          case 'list': return renderExamList();
+          case 'taking': return renderExamPlayer();
+          case 'result': return renderResult();
+          case 'editor': return renderExamEditor();
+          case 'ranking': return renderRanking();
+          default: return renderLandingMenu();
+      }
+  };
 
   return (
-    <div className="space-y-8 animate-fade-in pb-12">
-
-      {mode !== 'taking' && mode !== 'edit_exam' && (
-        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-premium-border dark:border-stone-700 pb-4">
-          <div>
-            <h1 className="text-3xl font-serif text-secondary dark:text-primary font-medium">Prova de Língua</h1>
-            <p className="text-gray-500 dark:text-gray-400 mt-1">Treine para a prova de proficiência acadêmica.</p>
-          </div>
-          {isProfessor ? (
-            <div className="flex gap-2 bg-yellow-50 dark:bg-yellow-900/10 p-2 rounded-xl border border-yellow-200 dark:border-yellow-800/30">
-              <span className="text-xs font-bold text-yellow-700 dark:text-yellow-500 uppercase flex items-center gap-2 px-2">
-                <Eye size={14} /> Modo Professora
-              </span>
+    <div className="min-h-screen animate-fade-in">
+      {/* Dynamic Header */}
+      {mode !== 'taking' && mode !== 'editor' && (
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b border-gray-100 dark:border-stone-800 pb-8 mb-10 pt-4">
+            <div>
+                <h1 className="text-[2.5rem] font-serif font-bold text-gray-900 dark:text-gray-100 leading-tight">Prova de Língua</h1>
+                <p className="text-gray-400 font-medium italic mt-1">Instrumental academic simulators for Master and PhD proficiency.</p>
             </div>
-          ) : (
-            <div className="flex gap-2 bg-surface dark:bg-dark-surface p-1 rounded-xl border border-premium-border dark:border-stone-700">
-              <button
-                onClick={() => setActiveTab('exams')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'exams' ? 'bg-white dark:bg-dark-card shadow-sm text-secondary dark:text-primary' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
-              >
-                Simulados
-              </button>
-              <button
-                onClick={() => setActiveTab('performance')}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'performance' ? 'bg-white dark:bg-dark-card shadow-sm text-secondary dark:text-primary' : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'}`}
-              >
-                Meu Desempenho
-              </button>
-            </div>
-          )}
+            
+            {!isProfessor ? (
+                <div className="bg-surface dark:bg-stone-900 p-1 rounded-2xl border border-premium-border dark:border-stone-800 flex shadow-inner">
+                    <button 
+                        onClick={() => setActiveTab('exams')}
+                        className={`px-8 py-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'exams' ? 'bg-white dark:bg-dark-card shadow-md text-secondary dark:text-primary' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        Simulados
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('performance')}
+                        className={`px-8 py-3 rounded-xl text-sm font-bold transition-all ${activeTab === 'performance' ? 'bg-white dark:bg-dark-card shadow-md text-secondary dark:text-primary' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        Meu Desempenho
+                    </button>
+                </div>
+            ) : (
+                <div className="flex items-center gap-4">
+                    <div className="bg-secondary/10 dark:bg-primary/5 text-secondary dark:text-primary px-5 py-2.5 rounded-2xl border border-secondary/20 dark:border-primary/10 flex items-center gap-2">
+                        <Eye size={18} />
+                        <span className="text-xs font-bold uppercase tracking-widest">Visão Estrutural (Mentor)</span>
+                    </div>
+                </div>
+            )}
         </header>
       )}
 
-      {mode === 'edit_exam' ? (
-        renderExamEditor()
-      ) : activeTab === 'performance' && !isProfessor ? (
-        renderPerformance()
-      ) : (
-        <>
-          {/* MENU MODE */}
-          {mode === 'menu' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div
-                onClick={() => selectLanguage('ENGLISH')}
-                className="bg-white dark:bg-dark-card p-8 rounded-3xl shadow-level-2 border border-transparent hover:border-premium-border dark:hover:border-stone-600 transition-all duration-300 cursor-pointer group hover:-translate-y-1"
-              >
-                <div className="w-14 h-14 bg-surface dark:bg-dark-surface rounded-2xl flex items-center justify-center text-secondary dark:text-primary mb-6 group-hover:scale-110 transition-transform shadow-inner">
-                  <span className="font-serif font-bold text-2xl">En</span>
-                </div>
-                <h3 className="font-serif text-2xl text-gray-800 dark:text-gray-100 mb-2 font-bold">Inglês Acadêmico</h3>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-6 leading-relaxed">Simulados focados em leitura, interpretação de abstracts e gramática instrumental.</p>
-                <span className="text-secondary dark:text-primary font-bold text-sm uppercase tracking-wider flex items-center group-hover:gap-2 transition-all">
-                  Acessar Simulados <ArrowLeft className="rotate-180 ml-2" size={16} />
-                </span>
-              </div>
-
-              <div
-                onClick={() => isProfessor ? selectLanguage('SPANISH') : null}
-                className={`bg-white dark:bg-dark-card p-8 rounded-3xl shadow-level-1 border border-transparent relative overflow-hidden ${isProfessor ? 'cursor-pointer hover:shadow-level-2' : 'opacity-60 cursor-not-allowed'}`}
-              >
-                {!isProfessor && <div className="absolute top-4 right-4 bg-gray-100 dark:bg-stone-800 px-3 py-1 rounded-full text-xs font-bold text-gray-400 uppercase tracking-widest">Em Breve</div>}
-                <div className="w-14 h-14 bg-gray-100 dark:bg-stone-800 rounded-2xl flex items-center justify-center text-gray-400 dark:text-gray-500 mb-6 font-serif font-bold text-2xl">
-                  Es
-                </div>
-                <h3 className="font-serif text-2xl text-gray-400 dark:text-gray-500 mb-2 font-bold">Espanhol</h3>
-                <p className="text-sm text-gray-400 dark:text-gray-500 mb-6 leading-relaxed">Conteúdo em preparação pela equipe pedagógica.</p>
-              </div>
-            </div>
-          )}
-
-          {/* LIST MODE */}
-          {mode === 'list' && (
-            <div className="space-y-6 animate-fade-in">
-              <div className="flex justify-between items-center">
-                <button onClick={backToMenu} className="text-gray-400 hover:text-secondary dark:hover:text-primary flex items-center gap-2 text-sm font-bold uppercase tracking-wider transition-colors">
-                  <ArrowLeft size={16} /> Voltar para Idiomas
-                </button>
-                {isProfessor && (
-                  <button onClick={createExam} className="bg-secondary dark:bg-primary text-white dark:text-stone-900 px-4 py-2 rounded-lg font-bold shadow-md flex items-center gap-2">
-                    <Plus size={18} /> Novo Simulado
-                  </button>
-                )}
-              </div>
-
-              <div className="grid gap-6">
-                {exams
-                  .filter(e => e.language === selectedLanguage)
-                  .filter(e => isProfessor || e.status === 'PUBLISHED')
-                  .map(exam => (
-                    <div key={exam.id} className="bg-white dark:bg-dark-card p-8 rounded-2xl shadow-level-1 hover:shadow-level-2 border border-premium-border dark:border-stone-700 transition-all group relative">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <div className="flex items-center gap-3 mb-2">
-                            <h3 className="font-serif text-xl font-bold text-gray-800 dark:text-gray-100">{exam.title}</h3>
-                            {isProfessor && (
-                              <span className={`text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider ${exam.status === 'PUBLISHED' ? 'bg-green-100 text-green-700 dark:bg-green-900/30' :
-                                exam.status === 'DRAFT' ? 'bg-gray-100 text-gray-500 dark:bg-stone-800' :
-                                  'bg-red-100 text-red-500'
-                                }`}>
-                                {exam.status === 'PUBLISHED' ? 'Publicado' : exam.status === 'DRAFT' ? 'Rascunho' : 'Inativo'}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-gray-600 dark:text-gray-300 mb-4 max-w-2xl">{exam.description}</p>
-                          <div className="flex gap-4 text-sm text-gray-400 dark:text-gray-500 font-medium">
-                            <span className="flex items-center gap-1"><BookOpen size={16} /> {exam.questions.length} Questões</span>
-                            <span className="flex items-center gap-1"><Clock size={16} /> ~{exam.durationMinutes} min</span>
-                          </div>
-                        </div>
-
-                        {isProfessor ? (
-                          <div className="flex gap-2">
-                            <button onClick={() => editExam(exam)} className="p-3 text-secondary dark:text-primary hover:bg-surface dark:hover:bg-stone-800 rounded-xl transition-colors tooltip" title="Editar">
-                              <Edit2 size={20} />
-                            </button>
-                            <button onClick={() => requestDeleteExam(exam.id)} className="p-3 text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-colors" title="Excluir">
-                              <Trash2 size={20} />
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => startExam(exam)}
-                            className="bg-secondary dark:bg-primary text-white dark:text-stone-900 px-6 py-3 rounded-xl font-bold shadow-lg shadow-secondary/20 hover:bg-[#6b5d52] dark:hover:bg-[#bda895] transition-all hover:-translate-y-1"
-                          >
-                            Iniciar
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                {exams.filter(e => e.language === selectedLanguage && (isProfessor || e.status === 'PUBLISHED')).length === 0 && (
-                  <div className="text-center py-10 text-gray-400">Nenhum simulado disponível neste momento.</div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAKING EXAM & RESULTS (Same as previous implementation, simplified here for length but logic retained) */}
-          {mode === 'taking' && selectedExam && (
-            // ... (Taking Exam View - same code as Step 385 verified, just re-rendered or skipped for brevity if allowed, but i must provide full file content)
-            <div className="max-w-3xl mx-auto animate-fade-in">
-              {/* ... Full Taking Exam Code ... */}
-              <div className="bg-white dark:bg-dark-card p-10 rounded-3xl shadow-level-2 border border-premium-border dark:border-stone-700">
-                <div className="flex justify-between items-center mb-8 border-b border-gray-100 dark:border-stone-700 pb-6">
-                  <span className="text-gray-400 text-xs font-bold uppercase tracking-widest">Questão {currentQ + 1} / {selectedExam.questions.length}</span>
-                  <div className="flex items-center text-secondary dark:text-primary bg-surface dark:bg-dark-surface px-3 py-1 rounded-full">
-                    <Clock size={14} className="mr-2" />
-                    <span className="font-mono text-sm font-bold">Em andamento</span>
-                  </div>
-                </div>
-
-                <h2 className="text-2xl font-serif text-gray-800 dark:text-gray-100 mb-8 leading-relaxed">
-                  {selectedExam.questions[currentQ].text}
-                </h2>
-
-                <div className="space-y-4 mb-10">
-                  {selectedExam.questions[currentQ].options.map((opt, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleAnswer(idx)}
-                      className={`w-full text-left p-6 rounded-xl border-2 transition-all duration-200 group flex items-center ${answers[currentQ] === idx
-                        ? 'bg-[#cdbaa6]/10 dark:bg-[#cdbaa6]/10 border-secondary dark:border-primary text-secondary dark:text-primary shadow-sm'
-                        : 'border-transparent bg-surface dark:bg-dark-surface hover:bg-gray-100 dark:hover:bg-stone-700 text-gray-600 dark:text-gray-300'
-                        }`}
-                    >
-                      <span className={`w-8 h-8 rounded-full flex items-center justify-center mr-4 text-sm font-bold border ${answers[currentQ] === idx ? 'bg-secondary dark:bg-primary text-white dark:text-stone-900 border-secondary dark:border-primary' : 'bg-white dark:bg-dark-card border-gray-300 dark:border-stone-600 text-gray-400'}`}>
-                        {String.fromCharCode(65 + idx)}
-                      </span>
-                      <span className="font-medium text-lg">{opt}</span>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex justify-between pt-6 border-t border-gray-100 dark:border-stone-700">
-                  <button
-                    disabled={currentQ === 0}
-                    onClick={() => setCurrentQ(curr => curr - 1)}
-                    className="px-6 py-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-30 font-bold text-sm uppercase tracking-wide transition-colors flex items-center"
-                  >
-                    <ArrowLeft size={16} className="mr-2" /> Anterior
-                  </button>
-
-                  {currentQ < selectedExam.questions.length - 1 ? (
-                    <button
-                      onClick={() => setCurrentQ(curr => curr + 1)}
-                      className="bg-primary hover:bg-[#bda895] text-white dark:text-stone-900 px-8 py-3 rounded-xl transition-all shadow-lg shadow-primary/20 font-medium"
-                    >
-                      Próxima
-                    </button>
-                  ) : (
-                    <button
-                      onClick={finishExam}
-                      disabled={answers.includes(-1)}
-                      className="bg-secondary hover:bg-[#7a6a5e] dark:bg-secondary/90 text-white px-8 py-3 rounded-xl transition-all shadow-lg shadow-secondary/20 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Finalizar Simulado
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {mode === 'result' && selectedExam && (
-            // ... (Result View - same logic) 
-            <div className="max-w-3xl mx-auto space-y-8 animate-fade-in">
-              <div className="bg-white dark:bg-dark-card p-10 rounded-3xl shadow-level-3 border border-premium-border dark:border-stone-700 text-center relative overflow-hidden transition-colors">
-                <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-primary to-secondary"></div>
-                <h2 className="text-3xl font-serif text-secondary dark:text-primary mb-2">Resultado Final</h2>
-                <p className="text-gray-500 dark:text-gray-400 mb-6">Confira abaixo seu desempenho detalhado</p>
-
-                <div className="w-40 h-40 rounded-full border-4 border-secondary dark:border-primary flex flex-col items-center justify-center mx-auto mb-8 bg-surface dark:bg-dark-surface shadow-inner">
-                  <span className="text-5xl font-bold text-gray-800 dark:text-gray-100 font-serif">
-                    {selectedExam.questions.reduce((acc, q, i) => acc + (answers[i] === q.correct ? 1 : 0), 0)}
-                  </span>
-                  <span className="text-sm text-gray-400 font-medium uppercase tracking-wider">de {selectedExam.questions.length} Questões</span>
-                </div>
-
-                <button onClick={backToMenu} className="text-secondary dark:text-primary font-bold hover:text-primary dark:hover:text-white transition-colors underline decoration-2 underline-offset-4">
-                  Voltar ao Menu de Provas
-                </button>
-              </div>
-              {/* Question Review List */}
-              <div className="space-y-6">
-                {selectedExam.questions.map((q, i) => (
-                  <div key={q.id} className="bg-white dark:bg-dark-card p-8 rounded-2xl shadow-level-1 border border-premium-border dark:border-stone-700 transition-colors">
-                    <div className="flex items-start">
-                      <div className="mt-1 mr-5">
-                        {answers[i] === q.correct ? <CheckCircle className="text-green-500" size={24} /> : <XCircle className="text-red-500" size={24} />}
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-serif text-lg font-medium text-gray-800 dark:text-gray-100 mb-4">{q.text}</p>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                          <div className={`p-4 rounded-xl border ${answers[i] === -1
-                            ? 'bg-gray-100 border-gray-300'
-                            : answers[i] === q.correct
-                              ? 'bg-green-50 border-green-200 dark:bg-green-900/10 dark:border-green-800'
-                              : 'bg-red-50 border-red-200 dark:bg-red-900/10 dark:border-red-800'
-                            }`}>
-                            <span className="text-xs text-gray-400 dark:text-gray-500 font-bold uppercase block mb-1">Sua resposta</span>
-                            <span className="font-medium text-gray-800 dark:text-gray-200">
-                              {answers[i] === -1 ? "Não respondida" : q.options[answers[i]]}
-                            </span>
-                          </div>
-
-                          {answers[i] !== q.correct && (
-                            <div className="p-4 rounded-xl bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-800/50">
-                              <span className="text-xs text-green-600 dark:text-green-400 font-bold uppercase block mb-1">Resposta Correta</span>
-                              <span className="font-medium text-green-800 dark:text-green-200">{q.options[q.correct]}</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {q.explanation && (
-                          <div className="relative bg-surface dark:bg-dark-surface p-5 rounded-xl text-gray-600 dark:text-gray-300 border-l-4 border-secondary/40 dark:border-primary/40">
-                            <div className="flex items-center gap-2 mb-2">
-                              <AlertCircle size={14} className="text-secondary dark:text-primary" />
-                              <span className="font-bold text-secondary dark:text-primary text-xs uppercase tracking-wider">Comentário da Professora</span>
-                            </div>
-                            <p className="italic">"{q.explanation}"</p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      {/* Main Body */}
+      {activeTab === 'performance' && mode === 'menu' ? renderPerformance() : renderContent()}
 
       <ConfirmModal
-        isOpen={deleteModalOpen}
-        title="Excluir Simulado?"
-        message="Tem certeza que deseja excluir este simulado? O histórico de tentativas dos alunos pode ser afetado se não for apenas inativado."
-        confirmText="Excluir Definitivamente"
+        isOpen={deleteModal.open}
+        title="Excluir Simulado Permanentemente?"
+        message="Esta ação não pode ser desfeita. Todas as questões e o histórico de tentativas dos alunos serão afetados no banco de dados."
+        confirmText="Sim, Excluir Definitivamente"
         cancelText="Cancelar"
         onConfirm={confirmDeleteExam}
-        onCancel={() => setDeleteModalOpen(false)}
-      />
-
-      <ConfirmModal
-        isOpen={optionDeleteModalOpen}
-        title="Excluir Alternativa?"
-        message="Tem certeza que deseja excluir esta alternativa? A resposta correta será ajustada automaticamente se necessário."
-        confirmText="Excluir"
-        cancelText="Cancelar"
-        onConfirm={confirmDeleteOption}
-        onCancel={() => setOptionDeleteModalOpen(false)}
+        onCancel={() => setDeleteModal({ open: false, id: null })}
       />
     </div>
   );
 };
+
+// --- Missing Icons ---
+const Loader = ({ className, size }: { className?: string, size?: number }) => <svg className={className} width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>;
+const ListIcon = ({ className, size }: { className?: string, size?: number }) => <svg className={className} width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>;
+const ClockIcon = ({ className, size }: { className?: string, size?: number }) => <svg className={className} width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>;
+const XIcon = ({ className, size }: { className?: string, size?: number }) => <svg className={className} width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>;
+const CheckIcon = ({ className, size }: { className?: string, size?: number }) => <svg className={className} width={size || 24} height={size || 24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>;
 
 export default LanguageExam;

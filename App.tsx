@@ -5,27 +5,39 @@ import Dashboard from './screens/Dashboard';
 import Projects from './screens/Projects';
 import LanguageExam from './screens/LanguageExam';
 import { WorkbookScreen } from './screens/WorkbookScreen';
-import { MessagesScreen } from './screens/MessagesScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
+import ForcePasswordChangeScreen from './screens/ForcePasswordChangeScreen';
 
-import { ProfessorPanel } from './screens/ProfessorPanel';
+import { AdminPanel as ProfessorPanel } from './screens/ProfessorPanel';
 import AIAssistant from './screens/AIAssistant';
 import { ProgressScreen } from './screens/ProgressScreen';
 import { EditaisScreen } from './screens/EditaisScreen';
 import { CurriculumScreen } from './screens/CurriculumScreen';
 import { CoursesScreen } from './screens/CoursesScreen';
 import { ViewState } from './types';
-import { PanelLeftOpen } from 'lucide-react';
+import { PanelLeftOpen, MessageSquare } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 const AppContent: React.FC = () => {
-  const { session, role, loading, signOut } = useAuth();
+  const { session, role, accessType, loading, forcePasswordChange, signOut } = useAuth();
   
   // Restore currentView from localStorage, fallback to DASHBOARD
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     const saved = localStorage.getItem('lara_current_view');
-    return (saved as ViewState) || 'DASHBOARD';
+    const view = (saved as ViewState) || 'DASHBOARD';
+    // If restricted student, must start on COURSES
+    if (role === 'STUDENT' && accessType === 'RESTRICTED') return 'COURSES';
+    return view;
   });
+
+  // Keep restricted students on allowed views
+  useEffect(() => {
+    if (role === 'STUDENT' && accessType === 'RESTRICTED') {
+      if (!['COURSES', 'PROFILE'].includes(currentView)) {
+        setCurrentView('COURSES');
+      }
+    }
+  }, [currentView, role, accessType]);
   
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -63,6 +75,10 @@ const AppContent: React.FC = () => {
     return <Login />;
   }
 
+  if (forcePasswordChange) {
+    return <ForcePasswordChangeScreen />;
+  }
+
   const renderContent = () => {
     switch (currentView) {
       // Pass toggle props to Dashboard as requested
@@ -73,12 +89,20 @@ const AppContent: React.FC = () => {
       case 'EDITAIS': return <EditaisScreen />;
       case 'PROGRESS': return <ProgressScreen />;
       case 'CURRICULUM': return <CurriculumScreen />;
-      case 'MESSAGES': return <MessagesScreen />;
+      case 'MESSAGES': return (
+          <div className="flex flex-col items-center justify-center h-[60vh] text-center animate-fade-in">
+              <div className="w-20 h-20 bg-surface dark:bg-dark-surface rounded-full flex items-center justify-center mb-6">
+                <MessageSquare size={32} className="text-gray-400" />
+              </div>
+              <h2 className="text-2xl font-serif font-bold text-gray-800 dark:text-gray-100 mb-3">Módulo Indisponível</h2>
+              <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">A aba de Mensagens foi temporariamente desativada para manutenção e não se encontra em funcionamento neste momento.</p>
+          </div>
+      );
       case 'PROFILE': return <ProfileScreen />;
       case 'WORKBOOK': return <WorkbookScreen />;
       case 'COURSES': return <CoursesScreen />;
-      case 'PROFESSOR_PANEL': return <ProfessorPanel onNavigate={setCurrentView} />;
-      default: return <Dashboard onToggleSidebar={toggleSidebar} isSidebarOpen={isSidebarOpen} />;
+      case 'PROFESSOR_PANEL': return role === 'STUDENT' ? (accessType === 'RESTRICTED' ? <CoursesScreen /> : <Dashboard onToggleSidebar={toggleSidebar} isSidebarOpen={isSidebarOpen} />) : <ProfessorPanel onNavigate={setCurrentView} />;
+      default: return accessType === 'RESTRICTED' ? <CoursesScreen /> : <Dashboard onToggleSidebar={toggleSidebar} isSidebarOpen={isSidebarOpen} />;
     }
   };
 
@@ -100,7 +124,7 @@ const AppContent: React.FC = () => {
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative transition-all duration-300 ease-in-out">
         {/* Mobile Header */}
         <div className="md:hidden bg-white dark:bg-dark-card border-b border-[#cdbaa6]/20 p-4 flex items-center justify-between transition-colors duration-300">
-          <span className="font-serif font-semibold text-secondary dark:text-primary">Mentoria</span>
+          <span className="font-serif font-semibold text-secondary dark:text-primary transition-colors">Plataforma Lara Lopes</span>
           <button onClick={() => setIsMobileOpen(true)} className="text-secondary dark:text-primary p-1">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
           </button>
@@ -114,7 +138,7 @@ const AppContent: React.FC = () => {
         {!isSidebarOpen && currentView !== 'DASHBOARD' && (
           <button
             onClick={toggleSidebar}
-            className="absolute top-6 left-6 z-40 p-2.5 rounded-full bg-white dark:bg-dark-card shadow-card border border-premium-border dark:border-stone-700 text-secondary hover:scale-105 transition-all hidden md:flex animate-fade-in"
+            className={`absolute top-6 left-6 z-40 p-2.5 rounded-full bg-white dark:bg-dark-card shadow-card border border-premium-border dark:border-stone-700 text-secondary hover:scale-105 transition-all hidden md:flex animate-fade-in ${accessType === 'RESTRICTED' ? 'md:hidden' : ''}`}
             title="Abrir Menu"
           >
             <PanelLeftOpen size={20} />

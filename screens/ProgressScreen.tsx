@@ -25,30 +25,17 @@ export const ProgressScreen: React.FC = () => {
         if (!user) return;
         setIsLoading(true);
         try {
-            if (user.id.startsWith('mock')) {
-                const sStr = localStorage.getItem('lara_progress_stages');
-                const iStr = localStorage.getItem('lara_progress_items');
-                const mockStages: ProgressStage[] = sStr ? JSON.parse(sStr) : [];
-                const mockItems: ProgressItem[] = iStr ? JSON.parse(iStr) : [];
-                
-                const combined = mockStages.map(stage => ({
-                    ...stage,
-                    items: mockItems.filter(item => item.stage_id === stage.id).sort((a,b) => a.order - b.order)
-                })).sort((a,b) => a.order - b.order);
-                setStages(combined);
-            } else {
-                const { data: dbStages, error: err1 } = await supabase.from('progress_stages').select('*').eq('student_id', user.id).order('order', { ascending: true });
-                if (err1) throw err1;
-                
-                const { data: dbItems, error: err2 } = await supabase.from('progress_items').select('*').eq('student_id', user.id).order('order', { ascending: true });
-                if (err2) throw err2;
+            const { data: dbStages, error: err1 } = await supabase.from('progress_stages').select('*').eq('student_id', user.id).order('order', { ascending: true });
+            if (err1) throw err1;
+            
+            const { data: dbItems, error: err2 } = await supabase.from('progress_items').select('*').eq('student_id', user.id).order('order', { ascending: true });
+            if (err2) throw err2;
 
-                const combined = (dbStages || []).map(stage => ({
-                    ...stage,
-                    items: (dbItems || []).filter(item => item.stage_id === stage.id)
-                }));
-                setStages(combined);
-            }
+            const combined = (dbStages || []).map(stage => ({
+                ...stage,
+                items: (dbItems || []).filter(item => item.stage_id === stage.id)
+            }));
+            setStages(combined);
         } catch (err) {
             console.error("Error fetching progress:", err);
         } finally {
@@ -107,43 +94,34 @@ export const ProgressScreen: React.FC = () => {
     const handleSaveStage = async (data: { title: string, description: string | null }) => {
         if (!user) throw new Error("Sessão inválida.");
         
-        if (user.id.startsWith('mock')) {
-            const mockStages = JSON.parse(localStorage.getItem('lara_progress_stages') || '[]');
-            if (stageModal.data) {
-                const updated = mockStages.map((s: any) => s.id === stageModal.data!.id ? { ...s, ...data } : s);
-                localStorage.setItem('lara_progress_stages', JSON.stringify(updated));
-            } else {
-                const newStage = { id: `mock-stage-${Date.now()}`, student_id: user.id, ...data, order: mockStages.length, created_at: new Date().toISOString() };
-                localStorage.setItem('lara_progress_stages', JSON.stringify([...mockStages, newStage]));
-            }
-            await fetchProgressData();
-            return;
-        }
-
         if (stageModal.data) {
-            const { error } = await supabase.from('progress_stages').update(data).eq('id', stageModal.data.id);
+            const { error, data: updated } = await supabase.from('progress_stages').update(data).eq('id', stageModal.data.id).select();
             if (error) throw new Error(error.message);
+            if (!updated || updated.length === 0) throw new Error("Alteração falhou. Verifique se o item existe.");
         } else {
             const order = stages.length;
-            const { error } = await supabase.from('progress_stages').insert([{ student_id: user.id, ...data, order }]);
+            const { error, data: inserted } = await supabase.from('progress_stages').insert([{ student_id: user.id, ...data, order }]).select();
             if (error) throw new Error(error.message);
+            if (!inserted || inserted.length === 0) throw new Error("Falha ao criar etapa.");
         }
         await fetchProgressData();
     };
 
     const executeDeleteStage = async (stageId: string) => {
-        if (user?.id.startsWith('mock')) {
-            const mockStages = JSON.parse(localStorage.getItem('lara_progress_stages') || '[]');
-            const mockItems = JSON.parse(localStorage.getItem('lara_progress_items') || '[]');
-            localStorage.setItem('lara_progress_stages', JSON.stringify(mockStages.filter((s:any) => s.id !== stageId)));
-            localStorage.setItem('lara_progress_items', JSON.stringify(mockItems.filter((i:any) => i.stage_id !== stageId)));
-        } else {
-            const { error } = await supabase.from('progress_stages').delete().eq('id', stageId);
+        // Cascade deleting items first
+        try {
+            await supabase.from('progress_items').delete().eq('stage_id', stageId);
+            const { error, data: deleted } = await supabase.from('progress_stages').delete().eq('id', stageId).select();
             if (error) throw new Error(error.message);
+            if (!deleted || deleted.length === 0) throw new Error("A etapa não pôde ser excluída. Pode já ter sido removida.");
+            await fetchProgressData();
+            if (selectedStage?.id === stageId) setSelectedStage(null);
+        } catch(err: any) {
+            console.error("Erro ao deletar etapa e seus itens:", err);
+            alert("Erro ao excluir etapa: " + err.message);
+        } finally {
+            setConfirmModal(prev => ({ ...prev, isOpen: false }));
         }
-        await fetchProgressData();
-        if (selectedStage?.id === stageId) setSelectedStage(null);
-        setConfirmModal(prev => ({ ...prev, isOpen: false }));
     };
 
 
@@ -153,25 +131,14 @@ export const ProgressScreen: React.FC = () => {
         const stage = stages.find(s => s.id === data.stage_id);
         const order = stage?.items?.length || 0;
 
-        if (user.id.startsWith('mock')) {
-            const mockItems = JSON.parse(localStorage.getItem('lara_progress_items') || '[]');
-            if (checklistModal.data) {
-                const updated = mockItems.map((i: any) => i.id === checklistModal.data!.id ? { ...i, title: data.title } : i);
-                localStorage.setItem('lara_progress_items', JSON.stringify(updated));
-            } else {
-                const newItem = { id: `mock-item-${Date.now()}`, student_id: user.id, stage_id: data.stage_id, title: data.title, completed: false, order, created_at: new Date().toISOString() };
-                localStorage.setItem('lara_progress_items', JSON.stringify([...mockItems, newItem]));
-            }
-            await fetchProgressData();
-            return;
-        }
-
         if (checklistModal.data) {
-            const { error } = await supabase.from('progress_items').update({ title: data.title }).eq('id', checklistModal.data.id);
+            const { error, data: updated } = await supabase.from('progress_items').update({ title: data.title }).eq('id', checklistModal.data.id).select();
             if (error) throw new Error(error.message);
+            if (!updated || updated.length === 0) throw new Error("A edição falhou.");
         } else {
-            const { error } = await supabase.from('progress_items').insert([{ student_id: user.id, stage_id: data.stage_id, title: data.title, order }]);
+            const { error, data: inserted } = await supabase.from('progress_items').insert([{ student_id: user.id, stage_id: data.stage_id, title: data.title, order }]).select();
             if (error) throw new Error(error.message);
+            if (!inserted || inserted.length === 0) throw new Error("Falha ao salvar item.");
         }
         await fetchProgressData();
     };
@@ -179,32 +146,24 @@ export const ProgressScreen: React.FC = () => {
     const handleToggleItem = async (itemId: string, currentStatus: boolean) => {
         if (isEditMode || !user) return;
         try {
-            if (user.id.startsWith('mock')) {
-                const mockItems = JSON.parse(localStorage.getItem('lara_progress_items') || '[]');
-                const updated = mockItems.map((i: any) => i.id === itemId ? { ...i, completed: !currentStatus } : i);
-                localStorage.setItem('lara_progress_items', JSON.stringify(updated));
-            } else {
-                const { error } = await supabase.from('progress_items').update({ completed: !currentStatus }).eq('id', itemId);
-                if (error) throw error;
-            }
+            const { error, data: updated } = await supabase.from('progress_items').update({ completed: !currentStatus }).eq('id', itemId).select();
+            if (error) throw error;
+            if (!updated || updated.length === 0) throw new Error("Ação não foi salva no banco.");
             // Rapid optimistic update locally so the UI feels instantaneous
             setStages(prev => prev.map(s => ({
                 ...s,
                 items: s.items?.map(i => i.id === itemId ? { ...i, completed: !currentStatus } : i)
             })));
-        } catch(err) {
+        } catch(err: any) {
             console.error(err);
+            alert("Erro ao alterar o status: " + err.message);
         }
     };
 
     const executeDeleteItem = async (itemId: string) => {
-        if (user?.id.startsWith('mock')) {
-            const mockItems = JSON.parse(localStorage.getItem('lara_progress_items') || '[]');
-            localStorage.setItem('lara_progress_items', JSON.stringify(mockItems.filter((i:any) => i.id !== itemId)));
-        } else {
-            const { error } = await supabase.from('progress_items').delete().eq('id', itemId);
-            if (error) throw new Error(error.message);
-        }
+        const { error, data: deleted } = await supabase.from('progress_items').delete().eq('id', itemId).select();
+        if (error) throw new Error(error.message);
+        if (!deleted || deleted.length === 0) throw new Error("O item já foi removido ou não pôde ser apagado.");
         await fetchProgressData();
         setConfirmModal(prev => ({ ...prev, isOpen: false }));
     };

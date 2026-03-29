@@ -34,7 +34,7 @@ export const LibraryScreen: React.FC = () => {
         <div className="bg-white dark:bg-dark-card p-8 rounded-2xl shadow-card dark:shadow-none border border-premium-border dark:border-stone-700 transition-colors">
           <h3 className="font-serif text-xl text-gray-800 dark:text-gray-100 mb-6 font-medium">Leituras Recomendadas</h3>
           <div className="space-y-4">
-            {['Artigo: Metodologia Qualitativa (Minayo)', 'Guia ABNT 2023'].map((item, i) => (
+            {['Artigo: Metodologia Qualitativa (Minayo)', 'Guia ABNT Atualizado'].map((item, i) => (
               <div key={i} className="p-4 rounded-xl bg-surface dark:bg-dark-surface hover:bg-[#ece8e5] dark:hover:bg-stone-600 flex justify-between items-center transition-colors cursor-pointer group">
                 <div className="flex items-center">
                   <FileText className="text-gray-500 dark:text-gray-400 mr-3 group-hover:text-secondary dark:group-hover:text-primary transition-colors" size={20} />
