@@ -1,10 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseServiceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
+const supabaseServiceRoleKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY;
 
 if (!supabaseServiceRoleKey) {
-  console.warn('Missing VITE_SUPABASE_SERVICE_ROLE_KEY in .env.local');
+  console.warn('Missing SUPABASE_SERVICE_ROLE_KEY in .env.local');
 }
 
 // Cliente administrativo com service_role key - NUNCA expor publicamente

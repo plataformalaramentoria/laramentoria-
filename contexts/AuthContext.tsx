@@ -4,8 +4,6 @@ import { supabase } from '../services/supabaseClient';
 import { Session, User } from '@supabase/supabase-js';
 import { Role, StudentAccessType } from '../types';
 
-// Conta mestre — sempre terá acesso ADMIN independente do banco de dados
-const MASTER_EMAILS = ['jotajoao29@gmail.com'];
 
 interface AuthContextType {
     session: Session | null;
@@ -56,26 +54,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const resolveProfile = async (userId: string, email: string | undefined, mounted: { current: boolean }): Promise<void> => {
-        const isMaster = MASTER_EMAILS.includes(email ?? '');
-
-        // Conta mestre → ADMIN garantido, sem consulta banco
-        if (isMaster) {
-            if (mounted.current) {
-                setRole('ADMIN');
-                setAccessType('FULL');
-                setIsActive(true);
-                setForcePasswordChange(false);
-                setFullName('Administrador');
-                localStorage.setItem('lara_role', 'ADMIN');
-                localStorage.setItem('lara_access_type', 'FULL');
-                localStorage.setItem('lara_force_pwd', 'false');
-                localStorage.setItem('lara_full_name', 'Administrador');
-                setLoading(false);
-            }
-            return;
-        }
-
-        // Usuários normais: buscar perfil no banco de dados
+        // Usuários: buscar perfil no banco de dados
         try {
             const { data, error } = await supabase
                 .from('profiles')
@@ -225,15 +204,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const refreshProfileSession = async () => {
         if (!user?.id) return;
-        const isMaster = MASTER_EMAILS.includes(user.email ?? '');
-        if (isMaster) {
-            setRole('ADMIN');
-            setAccessType('FULL');
-            setIsActive(true);
-            localStorage.setItem('lara_role', 'ADMIN');
-            localStorage.setItem('lara_access_type', 'FULL');
-            return;
-        }
         try {
             const { data, error } = await supabase
                 .from('profiles')

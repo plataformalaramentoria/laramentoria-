@@ -45,11 +45,8 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
     if (!user) return;
 
     const fetchDashboardData = async () => {
-      console.log("[Dashboard] Starting parallel fetch for user:", user.id);
-      
       const safetyTimeout = setTimeout(() => {
         if (mounted) {
-          console.warn("[Dashboard] 5 second safety timeout hit! Forcing load stop.");
           setIsLoading(false);
         }
       }, 5000);
@@ -62,7 +59,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
           supabaseAdmin.from('agenda_events').select('*').eq('student_id', user.id).order('event_date', { ascending: true })
         ]);
 
-        console.log("[Dashboard] Fetch results:", results);
         
         const [
           { data: messagesData, error: msgErr },
@@ -72,7 +68,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
         ] = results;
 
         if (msgErr || taskErr || goalErr || eventErr) {
-            console.error("[Dashboard] Fetch Errors:", { msgErr, taskErr, goalErr, eventErr });
+            console.error("Erro ao carregar dados do dashboard.");
         }
 
         if (mounted) {
@@ -172,25 +168,21 @@ const Dashboard: React.FC<DashboardProps> = ({ onToggleSidebar, isSidebarOpen = 
     try {
       if (taskModalState.data) {
         // Edit Mode
-        console.log("[Dashboard] Saving task edit:", data);
         const { data: updated, error } = await supabaseAdmin
           .from('dashboard_tasks')
           .update({ ...data, updated_by: user.id })
           .eq('id', taskModalState.data.id)
           .select();
         
-        console.log("[Dashboard] Edit result:", updated, error);
         if (error) throw new Error(error.message);
         if (updated) setTasks(tasks.map(t => t.id === taskModalState.data!.id ? updated[0] : t));
       } else {
         // Create Mode
-        console.log("[Dashboard] Creating new task:", data);
         const { data: created, error } = await supabaseAdmin
           .from('dashboard_tasks')
           .insert([{ student_id: user.id, created_by: user.id, updated_by: user.id, ...data }])
           .select();
         
-        console.log("[Dashboard] Create result:", created, error);
         if (error) throw new Error(error.message);
         if (created) setTasks([created[0], ...tasks]);
       }
