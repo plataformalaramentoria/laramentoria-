@@ -55,7 +55,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     { id: 'LANGUAGE', label: 'Prova de Língua', icon: Languages },
     { id: 'WORKBOOK', label: 'Apostilas', icon: BookOpen },
     { id: 'COURSES', label: 'Cursos', icon: MonitorPlay },
-    { id: 'AI', label: 'Lara.IA', icon: Bot },
+    // { id: 'AI', label: 'Lara.IA', icon: Bot }, // TEMPORARIAMENTE DESATIVADO - reativar quando necessário
     { id: 'PROFILE', label: 'Perfil', icon: UserCircle },
   ];
 
