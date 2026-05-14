@@ -338,7 +338,7 @@ export const CoursesScreen: React.FC = () => {
                 </div>
 
                 <div className="flex flex-1 overflow-hidden">
-                    {/* Sidebar Curriculum */}
+                    {/* Sidebar LMS Experience */}
                     <div className="w-80 bg-white dark:bg-dark-card border-r border-premium-border dark:border-stone-800 flex flex-col shrink-0 z-10 shadow-lg">
                         <div className="p-4 border-b border-gray-100 dark:border-stone-800 flex justify-between items-center bg-gray-50/50 dark:bg-stone-900/50">
                             <h3 className="font-bold text-gray-700 dark:text-gray-200 uppercase tracking-[0.2em] text-[10px]">Grade Curricular</h3>

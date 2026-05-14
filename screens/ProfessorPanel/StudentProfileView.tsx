@@ -6,7 +6,6 @@ import { useAuth } from '../../contexts/AuthContext';
 import { TaskModal, GoalModal, EventModal } from '../../components/DashboardModals';
 import { StageModal, ChecklistModal } from '../../components/ProgressModals';
 import Projects from '../Projects';
-import { CurriculumScreen } from '../CurriculumScreen';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { DashboardTask, DashboardGoal, AgendaEvent, ProgressStage, ProgressItem } from '../../types';
 
@@ -704,14 +703,6 @@ export const StudentProfileView: React.FC<StudentProfileViewProps> = ({ studentI
                 <Projects studentId={studentId} />
             </div>
 
-            {/* Curriculum Integration */}
-            <div className="bg-white dark:bg-dark-card p-8 rounded-3xl border border-gray-100 dark:border-stone-700 shadow-level-1">
-                <div className="mb-6">
-                    <h3 className="text-xl font-serif font-bold text-secondary dark:text-primary">Mapeamento de Currículo</h3>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Visualize e edite as seções do currículo Lattes desta aluna.</p>
-                </div>
-                <CurriculumScreen studentId={studentId} />
-            </div>
             
             {/* Modals for Dashboard elements */}
             <TaskModal

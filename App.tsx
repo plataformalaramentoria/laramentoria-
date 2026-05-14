@@ -12,7 +12,6 @@ import { AdminPanel as ProfessorPanel } from './screens/ProfessorPanel';
 import AIAssistant from './screens/AIAssistant';
 import { ProgressScreen } from './screens/ProgressScreen';
 import { EditaisScreen } from './screens/EditaisScreen';
-import { CurriculumScreen } from './screens/CurriculumScreen';
 import { CoursesScreen } from './screens/CoursesScreen';
 import { ViewState } from './types';
 import { PanelLeftOpen, MessageSquare } from 'lucide-react';
@@ -88,7 +87,6 @@ const AppContent: React.FC = () => {
       case 'AI': return <AIAssistant />;
       case 'EDITAIS': return <EditaisScreen />;
       case 'PROGRESS': return <ProgressScreen />;
-      case 'CURRICULUM': return <CurriculumScreen />;
       case 'MESSAGES': return (
           <div className="flex flex-col items-center justify-center h-[60vh] text-center animate-fade-in">
               <div className="w-20 h-20 bg-surface dark:bg-dark-surface rounded-full flex items-center justify-center mb-6">

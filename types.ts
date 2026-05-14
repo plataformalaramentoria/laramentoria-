@@ -26,7 +26,6 @@ export type ViewState =
   | 'PROGRESS'
   | 'EDITAIS'
   | 'PROJECTS'
-  | 'CURRICULUM'
   | 'LANGUAGE'
 
   | 'MESSAGES'
@@ -184,24 +183,6 @@ export interface Notice {
   created_at: string;
 }
 
-export interface CurriculumSection {
-  id: string;
-  student_id: string;
-  title: string;
-  order: number;
-  created_at: string;
-  expanded?: boolean; // UI State only
-  items?: CurriculumItem[]; // Included via joins
-}
-
-export interface CurriculumItem {
-  id: string;
-  section_id: string;
-  text: string;
-  completed: boolean;
-  order: number;
-  created_at: string;
-}
 
 export interface LanguageExam {
   id: string;

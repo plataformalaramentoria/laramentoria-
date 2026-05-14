@@ -8,7 +8,6 @@ import {
 
 // ProgressScreen removed - moved to separate file
 
-// CurriculumScreen removed - moved to separate file
 
 
 // --- Library/Materials Screen ---

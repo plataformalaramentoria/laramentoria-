@@ -26,7 +26,8 @@ const Projects: React.FC<ProjectsProps> = ({ studentId: propStudentId }) => {
   const isProfessor = role === 'PROFESSOR' || role === 'ADMIN';
 
   // The effective student ID we are viewing/managing
-  const effectiveStudentId = propStudentId || user?.id;
+  // Segurança: Se não for professor, ignorar qualquer propStudentId e usar o ID do próprio usuário logado.
+  const effectiveStudentId = isProfessor ? (propStudentId || user?.id) : user?.id;
 
   const [activeTab, setActiveTab] = useState<'history' | 'checklist'>('history');
   
@@ -58,10 +59,13 @@ const Projects: React.FC<ProjectsProps> = ({ studentId: propStudentId }) => {
             ${isProfessor ? ', student:profiles(full_name)' : ''}
           `);
       
-      if (propStudentId) {
-          query = query.eq('student_id', propStudentId);
-      } else if (!isProfessor) {
+      // Lógica de isolamento robusta: 
+      // Se não for professor, OBRIGA o filtro pelo ID do próprio usuário.
+      // Se for professor e tiver um propStudentId, filtra por ele.
+      if (!isProfessor) {
           query = query.eq('student_id', user!.id);
+      } else if (propStudentId) {
+          query = query.eq('student_id', propStudentId);
       }
 
       const { data: vData, error: vErr } = await query.order('version_number', { ascending: false });
@@ -86,11 +90,16 @@ const Projects: React.FC<ProjectsProps> = ({ studentId: propStudentId }) => {
       }
 
       // 2. Fetch Projects Checklist
-      const { data: checklistData, error: cErr } = await supabase
-          .from('project_checklist_items')
-          .select('*')
-          .eq('student_id', effectiveStudentId)
-          .order('order', { ascending: true });
+      // Lógica de isolamento para Checklist
+      let checklistQuery = supabase.from('project_checklist_items').select('*');
+      
+      if (!isProfessor) {
+          checklistQuery = checklistQuery.eq('student_id', user!.id);
+      } else {
+          checklistQuery = checklistQuery.eq('student_id', effectiveStudentId);
+      }
+
+      const { data: checklistData, error: cErr } = await checklistQuery.order('order', { ascending: true });
       if (cErr) {
           console.error("Erro ao buscar checklist:", cErr);
           throw new Error(`Erro no banco (Checklist): ${cErr.message}`);
