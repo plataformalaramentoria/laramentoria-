@@ -195,7 +195,7 @@ const Projects: React.FC<ProjectsProps> = ({ studentId: propStudentId }) => {
     
     const { error } = await supabase
         .from('project_checklist_items')
-        .update({ done: !currentStatus, updated_at: new Date().toISOString() })
+        .update({ done: !currentStatus })
         .eq('id', id);
     
     if (error) {
@@ -212,7 +212,7 @@ const Projects: React.FC<ProjectsProps> = ({ studentId: propStudentId }) => {
   const handleSaveChecklistItemText = async (id: string, text: string) => {
     const { error } = await supabase
         .from('project_checklist_items')
-        .update({ item: text, updated_at: new Date().toISOString() })
+        .update({ item: text })
         .eq('id', id);
     
     if (error) {
